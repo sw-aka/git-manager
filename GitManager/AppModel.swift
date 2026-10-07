@@ -13,18 +13,29 @@ public final class AppModel {
     public var selection: String?
 
     @ObservationIgnored private let store: Store
+    @ObservationIgnored private let serviceFactory: @Sendable (RepoLocation) -> RepoService
+    @ObservationIgnored private var persistenceEnabled = true
     @ObservationIgnored private let limiter = WorkLimiter()
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var started = false
 
-    public init(store: Store = Store()) {
+    public convenience init(store: Store = Store()) {
+        self.init(store: store, serviceFactory: { RepoService(location: $0) })
+    }
+
+    init(store: Store, serviceFactory: @escaping @Sendable (RepoLocation) -> RepoService) {
         self.store = store
+        self.serviceFactory = serviceFactory
         do {
-            let state = try store.load()
-            sources = state.sources
-            settings = state.settings
+            let loaded = try store.loadRecovering()
+            sources = loaded.state.sources
+            settings = loaded.state.settings
+            message = loaded.notice
             settings.fetchIntervalMinutes = settings.validatedInterval
-        } catch { message = "Could not load saved sources and settings: \(error.localizedDescription)" }
+        } catch {
+            persistenceEnabled = false
+            message = "Could not load saved sources and settings. The existing file is unchanged and saving is disabled: \(error.localizedDescription)"
+        }
     }
 
     public var visibleRepos: [RepoRecord] { repos.filter { !needsAttentionOnly || $0.status.needsAttention } }
@@ -59,8 +70,8 @@ public final class AppModel {
     }
 
     public func addLocal(_ url: URL) {
-        let path = url.standardizedFileURL.resolvingSymlinksInPath().path
-        guard !sources.contains(where: { if case .local(let folder) = $0 { folder.path == path } else { false } }) else { return }
+        let path = RepoLocation.canonicalLocalPath(url.path)
+        guard !sources.contains(where: { if case .local(let folder) = $0 { RepoLocation.canonicalLocalPath(folder.path) == path } else { false } }) else { return }
         sources.append(.local(LocalFolderSource(path: path)))
         persist()
         Task { await refreshAll() }
@@ -79,12 +90,16 @@ public final class AppModel {
 
     public func removeSource(_ sourceID: UUID) {
         sources.removeAll { $0.id == sourceID }
-        repos.removeAll { $0.location.source.id == sourceID }
+        repos = repos.compactMap { repo in
+            let remaining = repo.locations.filter { $0.source.id != sourceID }
+            return remaining.isEmpty ? nil : repo.withLocations(remaining)
+        }
         if !repos.contains(where: { $0.id == selection }) { selection = nil }
         persist()
     }
 
     private func persist() {
+        guard persistenceEnabled else { return }
         do { try store.save(StoredState(sources: sources, settings: settings)) }
         catch { message = "Could not save sources and settings: \(error.localizedDescription)" }
     }
@@ -113,7 +128,18 @@ public final class AppModel {
         }.value
         let existing = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
         let currentSourceIDs = Set(self.sources.map(\.id))
-        repos = discovered.filter { currentSourceIDs.contains($0.location.source.id) }.map { existing[$0.id] ?? $0 }
+        var consolidated: [RepoRecord] = []
+        var indices: [String: Int] = [:]
+        for repo in discovered where currentSourceIDs.contains(repo.location.source.id) {
+            if let index = indices[repo.id] {
+                let previous = consolidated[index]
+                consolidated[index] = previous.withLocations(previous.locations + repo.locations)
+            } else {
+                indices[repo.id] = consolidated.count
+                consolidated.append(existing[repo.id]?.withLocations(repo.locations) ?? repo)
+            }
+        }
+        repos = consolidated
         if !repos.contains(where: { $0.id == selection }) { selection = nil }
     }
 
@@ -147,7 +173,7 @@ public final class AppModel {
         guard !busy.contains(id), let repo = repos.first(where: { $0.id == id }) else { return }
         busy.insert(id)
         await limiter.acquire()
-        let service = RepoService(location: repo.location)
+        let service = serviceFactory(repo.location)
         var lastFetch = repo.status.lastFetch
         var error: String?
         if fetch {
@@ -164,7 +190,7 @@ public final class AppModel {
         guard !busy.contains(id), let repo = repos.first(where: { $0.id == id }), repo.status.canSync else { return }
         busy.insert(id)
         await limiter.acquire()
-        let outcome = await RepoService(location: repo.location).sync(lastFetch: repo.status.lastFetch)
+        let outcome = await serviceFactory(repo.location).sync(lastFetch: repo.status.lastFetch)
         apply(outcome.snapshot, to: id)
         await limiter.release()
         busy.remove(id)

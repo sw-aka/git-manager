@@ -1,4 +1,5 @@
 import Foundation
+import Darwin
 
 public struct LocalFolderSource: Codable, Hashable, Sendable, Identifiable {
     public var id: UUID
@@ -71,10 +72,24 @@ public struct RepoLocation: Hashable, Sendable {
 
     public init(source: RepoSource, path: String) {
         self.source = source
-        self.path = path
+        if case .local = source { self.path = Self.canonicalLocalPath(path) }
+        else { self.path = path }
     }
 
-    public var id: String { "\(source.id.uuidString):\(path)" }
+    public static func canonicalLocalPath(_ path: String) -> String {
+        let url = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
+        // realpath also unifies macOS's /var and /private/var spellings.
+        guard let resolved = realpath(url.path, nil) else { return url.path }
+        defer { free(resolved) }
+        return String(cString: resolved)
+    }
+
+    public var id: String {
+        switch source {
+        case .local: "local:\(path)"
+        case .remote(let remote): "remote:\(remote.host.utf8.count):\(remote.host):\(remote.port.map(String.init) ?? "default"):\(path)"
+        }
+    }
     public var name: String { URL(fileURLWithPath: path).lastPathComponent }
     public var displayPath: String {
         switch source {

@@ -29,11 +29,22 @@ public struct RepoStatus: Equatable, Sendable {
 }
 
 public struct RepoRecord: Identifiable, Sendable {
-    public let location: RepoLocation
+    public let locations: [RepoLocation]
+    public var location: RepoLocation { locations[0] }
+    public var sourceIDs: Set<UUID> { Set(locations.map { $0.source.id }) }
     public var status = RepoStatus()
     public var commits: [Commit] = []
 
-    public init(location: RepoLocation) { self.location = location }
+    public init(location: RepoLocation) { locations = [location] }
 
+    func withLocations(_ locations: [RepoLocation]) -> RepoRecord {
+        precondition(!locations.isEmpty)
+        var record = RepoRecord(locations: locations)
+        record.status = status
+        record.commits = commits
+        return record
+    }
+
+    private init(locations: [RepoLocation]) { self.locations = locations }
     public var id: String { location.id }
 }
