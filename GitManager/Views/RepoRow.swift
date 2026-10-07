@@ -6,24 +6,36 @@ struct RepoRow: View {
     let model: AppModel
     private var isBusy: Bool { model.busy.contains(repo.id) }
 
+    private var accessibilitySummary: String {
+        var parts = [repo.location.name, "Branch \(repo.status.branch)",
+                     "\(repo.status.behind) behind", "\(repo.status.ahead) ahead",
+                     repo.status.dirtyCountIsLowerBound
+                         ? "At least \(repo.status.dirtyCount) changed files"
+                         : "\(repo.status.dirtyCount) changed files"]
+        if repo.status.upstream == nil || repo.status.upstreamGone { parts.append(repo.status.badge) }
+        if isBusy { parts.append("Updating") }
+        if let error = repo.status.error { parts.append("Repository error: \(error)") }
+        return parts.joined(separator: ", ")
+    }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 7) {
+        HStack(spacing: 6) {
+            Text(repo.location.name)
+                .font(.body.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .layoutPriority(1)
+            Text(repo.status.branch)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Spacer(minLength: 0)
             HStack(spacing: 6) {
-                Text(repo.location.name).font(.headline).lineLimit(1)
-                Spacer(minLength: 0)
-                if isBusy { ProgressView().controlSize(.small) }
+                if isBusy { ProgressView().controlSize(.mini) }
                 if let error = repo.status.error {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.orange).help(error).accessibilityLabel("Repository error: \(error)")
-                }
-            }
-            HStack(spacing: 8) {
-                Label(repo.status.branch, systemImage: "arrow.triangle.branch").lineLimit(1)
-                Spacer(minLength: 0)
-                if repo.status.upstream == nil || repo.status.upstreamGone || repo.status.needsSync {
-                    Text(repo.status.badge)
-                        .foregroundStyle(repo.status.upstream == nil || repo.status.upstreamGone ? .secondary : .primary)
-                        .help(repo.status.upstream ?? "No upstream configured")
                 }
                 if repo.status.dirtyCount > 0 || repo.status.dirtyCountIsLowerBound {
                     HStack(spacing: 3) {
@@ -33,25 +45,30 @@ struct RepoRow: View {
                            ? "At least \(repo.status.dirtyCount) changed files; status output was truncated"
                            : "\(repo.status.dirtyCount) changed files")
                 }
-            }.font(.caption)
-            if let commit = repo.commits.first {
-                Text(commit.subject).lineLimit(1).font(.caption).foregroundStyle(.secondary)
-                Text(RelativeTime.string(commit.date)).font(.caption2).foregroundStyle(.tertiary)
+                if repo.status.upstream == nil || repo.status.upstreamGone {
+                    Text(repo.status.badge)
+                        .foregroundStyle(.secondary)
+                        .help(repo.status.upstream ?? "No upstream configured")
+                } else {
+                    HStack(spacing: 4) {
+                        Text("↓\(repo.status.behind)")
+                            .foregroundStyle(repo.status.behind == 0 ? .secondary : .primary)
+                            .fontWeight(repo.status.behind == 0 ? .regular : .semibold)
+                        Text("↑\(repo.status.ahead)")
+                            .foregroundStyle(repo.status.ahead == 0 ? .secondary : .primary)
+                            .fontWeight(repo.status.ahead == 0 ? .regular : .semibold)
+                    }
+                    .monospacedDigit()
+                    .help(repo.status.upstream ?? "No upstream configured")
+                }
             }
-            HStack(spacing: 10) {
-                Button("Sync", systemImage: "arrow.triangle.2.circlepath") { Task { await model.sync(repo.id) } }
-                    .disabled(isBusy || !repo.status.canSync)
-                    .help(repo.status.dirtyCountIsLowerBound ? "Sync is disabled because status output was truncated"
-                          : repo.status.canSync ? "Fast-forward pull, then push" : "Sync requires a branch and an upstream or origin")
-                Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
-                Spacer(minLength: 0)
-                Button { Task { await model.refresh(repo.id) } } label: { Image(systemName: "arrow.clockwise") }
-                    .disabled(isBusy).help("Fetch and refresh").accessibilityLabel("Refresh \(repo.location.name)")
-            }
-            .buttonStyle(.borderless)
             .font(.caption)
+            .fixedSize(horizontal: true, vertical: false)
+            .layoutPriority(2)
         }
-        .padding(.vertical, 7)
+        .padding(.vertical, 4)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(accessibilitySummary)
         .contextMenu {
             Button("Sync") { Task { await model.sync(repo.id) } }.disabled(isBusy || !repo.status.canSync)
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }

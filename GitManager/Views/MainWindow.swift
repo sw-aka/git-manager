@@ -65,7 +65,7 @@ struct MainWindow: View {
                 }
             }
             .listStyle(.sidebar)
-            .navigationSplitViewColumnWidth(min: 330, ideal: 390, max: 520)
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 420)
         } detail: {
             if let repo = model.selectedRepo {
                 RepoDetail(repo: repo, model: model)
