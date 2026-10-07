@@ -64,30 +64,39 @@ private final class ProcessCapture: @unchecked Sendable {
 
 struct ProcessExecutor: Sendable {
     let environment: [String: String]
+    private static let executionQueue = DispatchQueue(label: "com.alldeploy.gitmanager.processes", qos: .utility, attributes: .concurrent)
+    private static let limiter = WorkLimiter(limit: 6)
 
     init(environment: [String: String] = ProcessExecutor.userEnvironment) {
         self.environment = environment
     }
 
-    // Evaluated once per app process, including Finder launches without an agent variable.
-    static let userEnvironment: [String: String] = {
-        var environment = ProcessInfo.processInfo.environment
-        if environment["SSH_AUTH_SOCK", default: ""].isEmpty {
-            let result = execute(
-                CommandInvocation(executable: "/bin/launchctl", arguments: ["getenv", "SSH_AUTH_SOCK"]),
-                timeout: 2, environment: environment
-            )
-            let socket = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
-            if result.succeeded && !socket.isEmpty { environment["SSH_AUTH_SOCK"] = socket }
-        }
-        return environment
+    static let userEnvironment = ProcessInfo.processInfo.environment
+
+    // Only accessed on executionQueue. Finder's missing agent variable is recovered
+    // once without blocking the main actor or a Swift cooperative-pool thread.
+    private static let agentSocket: String? = {
+        let result = execute(
+            CommandInvocation(executable: "/bin/launchctl", arguments: ["getenv", "SSH_AUTH_SOCK"]),
+            timeout: 2, environment: userEnvironment
+        )
+        let socket = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        return result.succeeded && !socket.isEmpty ? socket : nil
     }()
 
     func run(_ command: CommandInvocation, timeout: TimeInterval) async -> CommandResult {
-        let environment = environment
-        return await Task.detached(priority: .utility) {
-            Self.execute(command, timeout: timeout, environment: environment)
-        }.value
+        await Self.limiter.acquire()
+        let result = await withCheckedContinuation { continuation in
+            Self.executionQueue.async {
+                var environment = self.environment
+                if environment["SSH_AUTH_SOCK", default: ""].isEmpty, let socket = Self.agentSocket {
+                    environment["SSH_AUTH_SOCK"] = socket
+                }
+                continuation.resume(returning: Self.execute(command, timeout: timeout, environment: environment))
+            }
+        }
+        await Self.limiter.release()
+        return result
     }
 
     private static func execute(

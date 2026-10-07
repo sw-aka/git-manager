@@ -30,6 +30,27 @@ private actor ControlledRunner: GitRunner {
     }
 }
 
+private actor StatusConcurrencyRunner: GitRunner {
+    private var active = 0
+    private var maximum = 0
+    private var statuses = 0
+    private var fetches = 0
+
+    func reset() { maximum = 0; statuses = 0; fetches = 0 }
+    func counts() -> (maximum: Int, statuses: Int, fetches: Int) { (maximum, statuses, fetches) }
+    func run(args: [String], timeout: TimeInterval) async -> CommandResult {
+        active += 1
+        maximum = max(maximum, active)
+        if args.first == "status" { statuses += 1 }
+        if args.first == "fetch" { fetches += 1 }
+        try? await Task.sleep(for: .milliseconds(10))
+        active -= 1
+        let output = args.first == "status" ? "# branch.head main\0# branch.upstream origin/main\0# branch.ab +0 -0\0"
+            : args.first == "remote" ? "origin\n" : ""
+        return CommandResult(stdout: output, stderr: "", exitCode: 0)
+    }
+}
+
 @MainActor
 final class AppModelTests: XCTestCase {
     private func temporaryDirectory() throws -> URL {
@@ -224,5 +245,29 @@ final class AppModelTests: XCTestCase {
         XCTAssertTrue(model.sourceScanErrors.isEmpty)
     }
 
-
+    func testLargeStatusAndIndividualRefreshBatchesShareConcurrencyLimit() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sources = (0..<36).map { RepoSource.remote(RemoteRepoSource(host: "host", path: "/repo-\($0)")) }
+        let store = Store(directory: root)
+        try store.save(StoredState(sources: sources))
+        let runner = StatusConcurrencyRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await model.refreshAll(fetch: false)
+        let initial = await runner.counts()
+        XCTAssertEqual(initial.statuses, 36)
+        XCTAssertEqual(initial.fetches, 0)
+        XCTAssertEqual(initial.maximum, 4)
+        await runner.reset()
+        await withTaskGroup(of: Void.self) { group in
+            for (index, id) in model.repos.map(\.id).enumerated() {
+                group.addTask { await model.refresh(id, fetch: index.isMultiple(of: 2)) }
+            }
+        }
+        let individual = await runner.counts()
+        XCTAssertEqual(individual.statuses, 36)
+        XCTAssertEqual(individual.fetches, 18)
+        XCTAssertEqual(individual.maximum, 4)
+        XCTAssertTrue(model.busy.isEmpty)
+    }
 }

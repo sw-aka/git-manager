@@ -83,4 +83,46 @@ final class ProcessExecutorTests: XCTestCase {
         XCTAssertFalse(result.succeeded)
         XCTAssertFalse(result.stderr.isEmpty)
     }
+
+    func testManyBlockingCommandsAreBoundedAndAllowAsyncProgress() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-batch-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let events = root.appendingPathComponent("events")
+        let log = SSHGitRunner.quote(events.path)
+        let command = CommandInvocation(executable: "/bin/sh", arguments: ["-c",
+            "printf 'start\\n' >> " + log + "; sleep 0.15; printf 'end\\n' >> " + log
+        ])
+        var environment = ProcessExecutor.userEnvironment
+        environment["SSH_AUTH_SOCK"] = "/unused/gitmanager-test-agent"
+        let executor = ProcessExecutor(environment: environment)
+        let progress = Task.detached {
+            let deadline = Date().addingTimeInterval(3)
+            while Date() < deadline {
+                let records = (try? String(contentsOf: events, encoding: .utf8))?.split(separator: "\n") ?? []
+                if records.filter({ $0 == "start" }).count > records.filter({ $0 == "end" }).count { return true }
+                try? await Task.sleep(for: .milliseconds(10))
+            }
+            return false
+        }
+        let results = await withTaskGroup(of: CommandResult.self, returning: [CommandResult].self) { group in
+            for _ in 0..<36 { group.addTask { await executor.run(command, timeout: 5) } }
+            var results: [CommandResult] = []
+            for await result in group { results.append(result) }
+            return results
+        }
+        XCTAssertEqual(results.count, 36)
+        XCTAssertTrue(results.allSatisfy(\.succeeded))
+        let madeProgress = await progress.value
+        XCTAssertTrue(madeProgress, "Swift tasks did not make progress while child processes were running")
+        var active = 0
+        var maximum = 0
+        for event in try String(contentsOf: events, encoding: .utf8).split(separator: "\n") {
+            active += event == "start" ? 1 : -1
+            maximum = max(maximum, active)
+        }
+        XCTAssertEqual(active, 0)
+        XCTAssertGreaterThan(maximum, 1)
+        XCTAssertLessThanOrEqual(maximum, 6)
+    }
 }
