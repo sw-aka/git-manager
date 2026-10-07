@@ -93,6 +93,27 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(outcome.snapshot.status.dirtyCount, 2)
     }
 
+    private func addUntrackedDirectory() throws {
+        let directory = URL(fileURLWithPath: a).appendingPathComponent("new directory")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        for name in ["one", "two", "three"] { try Data(name.utf8).write(to: directory.appendingPathComponent(name)) }
+    }
+
+    func testCountsEveryUntrackedFileInsideNewDirectory() async throws {
+        try addUntrackedDirectory()
+        let snapshot = await service(a).snapshot()
+        XCTAssertNil(snapshot.status.error)
+        XCTAssertEqual(snapshot.status.dirtyCount, 3)
+    }
+
+    func testCountsUntrackedFilesDespiteUserConfiguration() async throws {
+        try addUntrackedDirectory()
+        try await git(a, ["config", "status.showUntrackedFiles", "no"])
+        let snapshot = await service(a).snapshot()
+        XCTAssertNil(snapshot.status.error)
+        XCTAssertEqual(snapshot.status.dirtyCount, 3)
+    }
+
     func testDivergenceFailsWithoutChangingHEADOrRebasing() async throws {
         try await commit(a, file: "local.txt", text: "local", subject: "local divergence")
         try await commit(b, file: "remote.txt", text: "remote", subject: "remote divergence")

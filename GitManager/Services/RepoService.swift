@@ -24,7 +24,7 @@ public struct RepoService: Sendable {
     }
 
     public func snapshot(lastFetch: Date? = nil, operationError: String? = nil) async -> RepoSnapshot {
-        let result = await runner.run(args: ["status", "--porcelain=v2", "--branch", "-z"], timeout: 15)
+        let result = await runner.run(args: ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], timeout: 15)
         guard result.succeeded else {
             var status = RepoStatus()
             status.lastFetch = lastFetch
