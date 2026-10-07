@@ -187,4 +187,42 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repos.count, 2)
     }
 
+    func testSourceScanErrorsKeepAccessibleReposAndClearAfterRecovery() async throws {
+        let root = try temporaryDirectory()
+        let blocked = root.appendingPathComponent("blocked")
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: blocked.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let accessible = root.appendingPathComponent("accessible")
+        try FileManager.default.createDirectory(at: accessible.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blocked.path)
+        let source = RepoSource.local(LocalFolderSource(path: root.path))
+        let missing = RepoSource.local(LocalFolderSource(path: root.appendingPathComponent("absent").path))
+        let store = Store(directory: root.appendingPathComponent("state"))
+        try store.save(StoredState(sources: [source, missing]))
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await model.refreshAll(fetch: false)
+        XCTAssertEqual(model.repos.map(\.location.path), [RepoLocation.canonicalLocalPath(accessible.path)])
+        XCTAssertNil(model.repos.first?.status.error)
+        XCTAssertEqual(model.sourceScanErrors[source.id]?.count, 1)
+        XCTAssertTrue(model.sourceScanErrors[source.id]?.first?.path.hasSuffix("/blocked") == true)
+        XCTAssertEqual(model.sourceScanErrors[missing.id]?.count, 1)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: blocked.path)
+        await model.refreshAll(fetch: false)
+        XCTAssertNil(model.sourceScanErrors[source.id])
+        // Missing roots report source errors without inventing repositories.
+        XCTAssertEqual(model.sourceScanErrors[missing.id]?.count, 1)
+        model.removeSource(missing.id)
+        try FileManager.default.removeItem(at: accessible)
+        try FileManager.default.removeItem(at: blocked)
+        await model.refreshAll(fetch: false)
+        XCTAssertTrue(model.repos.isEmpty)
+        model.removeSource(source.id)
+        XCTAssertTrue(model.sourceScanErrors.isEmpty)
+    }
+
+
 }

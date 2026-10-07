@@ -6,6 +6,7 @@ public final class AppModel {
     public private(set) var sources: [RepoSource] = []
     public private(set) var settings = AppSettings()
     public private(set) var repos: [RepoRecord] = []
+    public private(set) var sourceScanErrors: [UUID: [ScanIssue]] = [:]
     public private(set) var busy: Set<String> = []
     public private(set) var isRefreshing = false
     public var message: String?
@@ -95,6 +96,7 @@ public final class AppModel {
 
     public func removeSource(_ sourceID: UUID) {
         sources.removeAll { $0.id == sourceID }
+        sourceScanErrors.removeValue(forKey: sourceID)
         repos = repos.compactMap { repo in
             let remaining = repo.locations.filter { $0.source.id != sourceID }
             return remaining.isEmpty ? nil : repo.withLocations(remaining)
@@ -113,29 +115,31 @@ public final class AppModel {
         let sources = sources
         let discovered = await Task.detached(priority: .utility) {
             var records: [RepoRecord] = []
+            var errors: [UUID: [ScanIssue]] = [:]
             for source in sources {
                 switch source {
                 case .remote(let remote):
                     records.append(RepoRecord(location: RepoLocation(source: source, path: remote.path)))
                 case .local(let folder):
                     do {
-                        for path in try Scanner().repositories(in: folder.path) {
+                        let scan = try Scanner().scan(in: folder.path)
+                        errors[source.id] = scan.issues
+                        for path in scan.repositories {
                             records.append(RepoRecord(location: RepoLocation(source: source, path: path)))
                         }
                     } catch {
-                        var record = RepoRecord(location: RepoLocation(source: source, path: folder.path))
-                        record.status.error = error.localizedDescription
-                        records.append(record)
+                        errors[source.id] = [ScanIssue(path: folder.path, message: error.localizedDescription)]
                     }
                 }
             }
-            return records
+            return (records: records, errors: errors)
         }.value
         let existing = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
         let currentSourceIDs = Set(self.sources.map(\.id))
+        sourceScanErrors = discovered.errors.filter { currentSourceIDs.contains($0.key) && !$0.value.isEmpty }
         var consolidated: [RepoRecord] = []
         var indices: [String: Int] = [:]
-        for repo in discovered where currentSourceIDs.contains(repo.location.source.id) {
+        for repo in discovered.records where currentSourceIDs.contains(repo.location.source.id) {
             if let index = indices[repo.id] {
                 let previous = consolidated[index]
                 consolidated[index] = previous.withLocations(previous.locations + repo.locations)

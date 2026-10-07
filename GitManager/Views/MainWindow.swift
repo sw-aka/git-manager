@@ -41,7 +41,15 @@ struct MainWindow: View {
                         }
                         ForEach(records) { repo in RepoRow(repo: repo, model: model).tag(repo.id) }
                     } header: {
-                        Text(source.title)
+                        HStack {
+                            Text(source.title)
+                            if let issues = model.sourceScanErrors[source.id], !issues.isEmpty {
+                                Image(systemName: "exclamationmark.triangle.fill")
+                                    .foregroundStyle(.orange)
+                                    .accessibilityLabel("Some folders could not be scanned")
+                                    .help(issues.map { "\($0.path): \($0.message)" }.joined(separator: "\n"))
+                            }
+                        }
                             .help(localPath(source))
                             .contextMenu {
                                 Button("Remove Source", role: .destructive) { model.removeSource(source.id) }

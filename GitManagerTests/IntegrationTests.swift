@@ -237,6 +237,22 @@ final class IntegrationTests: XCTestCase {
         XCTAssertEqual(pushCount, 0)
     }
 
+    func testScannerKeepsAccessibleRepositoriesBesideUnreadableChild() async throws {
+        let scanRoot = root.appendingPathComponent("partial scan")
+        let accessible = scanRoot.appendingPathComponent("accessible")
+        let blocked = scanRoot.appendingPathComponent("blocked")
+        try FileManager.default.createDirectory(at: accessible, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: blocked, withIntermediateDirectories: true)
+        try await git(accessible.path, ["init", "--initial-branch=main"])
+        try FileManager.default.setAttributes([.posixPermissions: 0o000], ofItemAtPath: blocked.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: blocked.path) }
+        let result = try Scanner().scan(in: scanRoot.path)
+        XCTAssertEqual(result.repositories, [accessible.path])
+        XCTAssertEqual(result.issues.count, 1)
+        XCTAssertEqual(result.issues.first?.path, blocked.path)
+        XCTAssertFalse(result.issues.first?.message.isEmpty ?? true)
+    }
+
     func testScannerDepthHiddenNodeModulesAndGitFile() async throws {
         let scanRoot = root.appendingPathComponent("scan")
         try FileManager.default.createDirectory(at: scanRoot, withIntermediateDirectories: true)
