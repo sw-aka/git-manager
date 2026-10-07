@@ -1,5 +1,5 @@
 import XCTest
-@testable import GitManager
+@testable import GitManagerCore
 
 @MainActor
 final class IntegrationTests: XCTestCase {

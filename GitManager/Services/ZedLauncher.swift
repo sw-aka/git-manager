@@ -1,9 +1,11 @@
 import Foundation
 
-struct ZedLauncher: Sendable {
+public struct ZedLauncher: Sendable {
     static let applicationPath = "/Applications/Zed.app"
     static let cliPath = applicationPath + "/Contents/MacOS/cli"
     var executor = ProcessExecutor()
+
+    public init() {}
 
     static func remoteURI(_ source: RemoteRepoSource) throws -> String {
         try source.validate()
@@ -38,7 +40,7 @@ struct ZedLauncher: Sendable {
             return CommandInvocation(executable: cliPath, arguments: [try remoteURI(remote)])
         }
     }
-    func open(_ location: RepoLocation) async -> CommandResult {
+    public func open(_ location: RepoLocation) async -> CommandResult {
         do { return await executor.run(try Self.command(for: location), timeout: 15) }
         catch { return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1) }
     }

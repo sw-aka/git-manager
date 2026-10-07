@@ -1,17 +1,29 @@
 import Foundation
 
-struct LocalFolderSource: Codable, Hashable, Sendable, Identifiable {
-    var id = UUID()
-    var path: String
+public struct LocalFolderSource: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var path: String
+
+    public init(id: UUID = UUID(), path: String) {
+        self.id = id
+        self.path = path
+    }
 }
 
-struct RemoteRepoSource: Codable, Hashable, Sendable, Identifiable {
-    var id = UUID()
-    var host: String
-    var port: Int?
-    var path: String
+public struct RemoteRepoSource: Codable, Hashable, Sendable, Identifiable {
+    public var id: UUID
+    public var host: String
+    public var port: Int?
+    public var path: String
 
-    func validate() throws {
+    public init(id: UUID = UUID(), host: String, port: Int? = nil, path: String) {
+        self.id = id
+        self.host = host
+        self.port = port
+        self.path = path
+    }
+
+    public func validate() throws {
         let hostParts = host.split(separator: "@", omittingEmptySubsequences: false)
         let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-@:[]")
         guard !host.isEmpty, !host.hasPrefix("-"), hostParts.count <= 2,
@@ -35,17 +47,17 @@ enum ValidationError: LocalizedError {
     }
 }
 
-enum RepoSource: Codable, Hashable, Sendable, Identifiable {
+public enum RepoSource: Codable, Hashable, Sendable, Identifiable {
     case local(LocalFolderSource)
     case remote(RemoteRepoSource)
 
-    var id: UUID {
+    public var id: UUID {
         switch self {
         case .local(let source): source.id
         case .remote(let source): source.id
         }
     }
-    var title: String {
+    public var title: String {
         switch self {
         case .local(let source): URL(fileURLWithPath: source.path).lastPathComponent
         case .remote(let source): source.host
@@ -53,12 +65,18 @@ enum RepoSource: Codable, Hashable, Sendable, Identifiable {
     }
 }
 
-struct RepoLocation: Hashable, Sendable {
-    let source: RepoSource
-    let path: String
-    var id: String { "\(source.id.uuidString):\(path)" }
-    var name: String { URL(fileURLWithPath: path).lastPathComponent }
-    var displayPath: String {
+public struct RepoLocation: Hashable, Sendable {
+    public let source: RepoSource
+    public let path: String
+
+    public init(source: RepoSource, path: String) {
+        self.source = source
+        self.path = path
+    }
+
+    public var id: String { "\(source.id.uuidString):\(path)" }
+    public var name: String { URL(fileURLWithPath: path).lastPathComponent }
+    public var displayPath: String {
         switch source {
         case .local: path
         case .remote(let remote): "\(remote.host)\(remote.port.map { ":\($0)" } ?? ""):\(path)"

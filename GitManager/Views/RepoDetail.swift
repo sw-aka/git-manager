@@ -1,3 +1,4 @@
+import GitManagerCore
 import SwiftUI
 
 struct RepoDetail: View {

@@ -1,5 +1,5 @@
 import XCTest
-@testable import GitManager
+@testable import GitManagerCore
 
 final class StoreTests: XCTestCase {
     func testRoundTripAndDefaults() throws {

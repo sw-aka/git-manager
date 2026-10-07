@@ -1,11 +1,11 @@
 import Foundation
 
-struct Commit: Identifiable, Equatable, Sendable {
-    let hash: String
-    let subject: String
-    let author: String
-    let date: Date
-    var isUnpushed: Bool
-    var id: String { hash }
-    var shortHash: String { String(hash.prefix(8)) }
+public struct Commit: Identifiable, Equatable, Sendable {
+    public let hash: String
+    public let subject: String
+    public let author: String
+    public let date: Date
+    public var isUnpushed: Bool
+    public var id: String { hash }
+    public var shortHash: String { String(hash.prefix(8)) }
 }

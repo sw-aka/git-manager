@@ -1,3 +1,4 @@
+import GitManagerCore
 import SwiftUI
 import AppKit
 

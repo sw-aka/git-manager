@@ -1,6 +1,6 @@
 import XCTest
 import Darwin
-@testable import GitManager
+@testable import GitManagerCore
 
 @MainActor
 final class ProcessExecutorTests: XCTestCase {

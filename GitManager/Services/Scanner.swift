@@ -1,7 +1,9 @@
 import Foundation
 
-struct Scanner: Sendable {
-    func repositories(in path: String) throws -> [String] {
+public struct Scanner: Sendable {
+    public init() {}
+
+    public func repositories(in path: String) throws -> [String] {
         let root = URL(fileURLWithPath: path).standardizedFileURL.resolvingSymlinksInPath()
         var isDirectory: ObjCBool = false
         guard FileManager.default.fileExists(atPath: root.path, isDirectory: &isDirectory), isDirectory.boolValue else {

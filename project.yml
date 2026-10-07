@@ -1,9 +1,13 @@
 name: GitManager
 options:
+  # Keep test bundles free of the target preset's BUNDLE_LOADER setting.
+  settingPresets: project
   deploymentTarget:
     macOS: '15.0'
 settings:
   base:
+    SDKROOT: macosx
+    LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/../Frameworks @loader_path/../Frameworks"
     SWIFT_VERSION: '6.0'
     SWIFT_STRICT_CONCURRENCY: complete
     MACOSX_DEPLOYMENT_TARGET: '15.0'
@@ -14,10 +18,28 @@ settings:
     GENERATE_INFOPLIST_FILE: YES
     SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
 targets:
+  GitManagerCore:
+    type: framework
+    platform: macOS
+    sources:
+      - GitManager/Models
+      - GitManager/Git
+      - GitManager/Services
+      - GitManager/AppModel.swift
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager.core
+        DEFINES_MODULE: YES
+        DYLIB_INSTALL_NAME_BASE: "@rpath"
   GitManager:
     type: application
     platform: macOS
-    sources: [GitManager]
+    sources:
+      - path: GitManager
+        excludes: [Models, Git, Services, AppModel.swift]
+    dependencies:
+      - target: GitManagerCore
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager
@@ -28,7 +50,8 @@ targets:
     platform: macOS
     sources: [GitManagerTests]
     dependencies:
-      - target: GitManager
+      - target: GitManagerCore
+        embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager.tests
@@ -39,7 +62,5 @@ schemes:
         GitManager: all
     test:
       targets: [GitManagerTests]
-      environmentVariables:
-        GIT_MANAGER_DATA_DIR: $(PROJECT_DIR)/build/TestingAppState
     run:
       config: Debug

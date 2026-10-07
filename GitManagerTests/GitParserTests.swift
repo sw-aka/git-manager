@@ -1,5 +1,5 @@
 import XCTest
-@testable import GitManager
+@testable import GitManagerCore
 
 final class GitParserTests: XCTestCase {
     func testAheadBehind() {

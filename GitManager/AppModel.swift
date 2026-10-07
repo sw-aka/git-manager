@@ -2,22 +2,22 @@ import Foundation
 import Observation
 
 @MainActor @Observable
-final class AppModel {
-    private(set) var sources: [RepoSource] = []
-    private(set) var settings = AppSettings()
-    private(set) var repos: [RepoRecord] = []
-    private(set) var busy: Set<String> = []
-    private(set) var isRefreshing = false
-    var message: String?
-    var needsAttentionOnly = false
-    var selection: String?
+public final class AppModel {
+    public private(set) var sources: [RepoSource] = []
+    public private(set) var settings = AppSettings()
+    public private(set) var repos: [RepoRecord] = []
+    public private(set) var busy: Set<String> = []
+    public private(set) var isRefreshing = false
+    public var message: String?
+    public var needsAttentionOnly = false
+    public var selection: String?
 
     @ObservationIgnored private let store: Store
     @ObservationIgnored private let limiter = WorkLimiter()
     @ObservationIgnored private var timer: Task<Void, Never>?
     @ObservationIgnored private var started = false
 
-    init(store: Store = Store()) {
+    public init(store: Store = Store()) {
         self.store = store
         do {
             let state = try store.load()
@@ -27,12 +27,12 @@ final class AppModel {
         } catch { message = "Could not load saved sources and settings: \(error.localizedDescription)" }
     }
 
-    var visibleRepos: [RepoRecord] { repos.filter { !needsAttentionOnly || $0.status.needsAttention } }
-    var syncRepos: [RepoRecord] { repos.filter { $0.status.needsSync } }
-    var menuBarTitle: String { syncRepos.isEmpty ? "" : String(syncRepos.count) }
-    var selectedRepo: RepoRecord? { repos.first { $0.id == selection } }
+    public var visibleRepos: [RepoRecord] { repos.filter { !needsAttentionOnly || $0.status.needsAttention } }
+    public var syncRepos: [RepoRecord] { repos.filter { $0.status.needsSync } }
+    public var menuBarTitle: String { syncRepos.isEmpty ? "" : String(syncRepos.count) }
+    public var selectedRepo: RepoRecord? { repos.first { $0.id == selection } }
 
-    func start() async {
+    public func start() async {
         guard !started else { return }
         started = true
         await refreshAll(fetch: false)
@@ -40,7 +40,7 @@ final class AppModel {
         await refreshAll(fetch: true)
     }
 
-    func setInterval(_ minutes: Int) {
+    public func setInterval(_ minutes: Int) {
         settings.fetchIntervalMinutes = min(1440, max(1, minutes))
         persist()
         if started { scheduleTimer() }
@@ -58,7 +58,7 @@ final class AppModel {
         }
     }
 
-    func addLocal(_ url: URL) {
+    public func addLocal(_ url: URL) {
         let path = url.standardizedFileURL.resolvingSymlinksInPath().path
         guard !sources.contains(where: { if case .local(let folder) = $0 { folder.path == path } else { false } }) else { return }
         sources.append(.local(LocalFolderSource(path: path)))
@@ -66,7 +66,7 @@ final class AppModel {
         Task { await refreshAll() }
     }
 
-    func addRemote(_ remote: RemoteRepoSource) throws {
+    public func addRemote(_ remote: RemoteRepoSource) throws {
         try remote.validate()
         guard !sources.contains(where: {
             if case .remote(let source) = $0 { source.host == remote.host && source.port == remote.port && source.path == remote.path }
@@ -77,7 +77,7 @@ final class AppModel {
         Task { await refreshAll() }
     }
 
-    func removeSource(_ sourceID: UUID) {
+    public func removeSource(_ sourceID: UUID) {
         sources.removeAll { $0.id == sourceID }
         repos.removeAll { $0.location.source.id == sourceID }
         if !repos.contains(where: { $0.id == selection }) { selection = nil }
@@ -117,7 +117,7 @@ final class AppModel {
         if !repos.contains(where: { $0.id == selection }) { selection = nil }
     }
 
-    func refreshAll(fetch: Bool = true) async {
+    public func refreshAll(fetch: Bool = true) async {
         guard !isRefreshing else { return }
         isRefreshing = true
         let scannedSources = sources
@@ -143,7 +143,7 @@ final class AppModel {
         if sources != scannedSources { await refreshAll(fetch: fetch) }
     }
 
-    func refresh(_ id: String, fetch: Bool = true) async {
+    public func refresh(_ id: String, fetch: Bool = true) async {
         guard !busy.contains(id), let repo = repos.first(where: { $0.id == id }) else { return }
         busy.insert(id)
         await limiter.acquire()
@@ -160,7 +160,7 @@ final class AppModel {
         busy.remove(id)
     }
 
-    func sync(_ id: String) async {
+    public func sync(_ id: String) async {
         guard !busy.contains(id), let repo = repos.first(where: { $0.id == id }), repo.status.canSync else { return }
         busy.insert(id)
         await limiter.acquire()
@@ -170,7 +170,7 @@ final class AppModel {
         busy.remove(id)
     }
 
-    func openInZed(_ id: String) async {
+    public func openInZed(_ id: String) async {
         guard let repo = repos.first(where: { $0.id == id }) else { return }
         let result = await ZedLauncher().open(repo.location)
         if !result.succeeded, let index = repos.firstIndex(where: { $0.id == id }) {

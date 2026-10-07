@@ -6,13 +6,13 @@ struct CommandInvocation: Equatable, Sendable {
     let arguments: [String]
 }
 
-struct CommandResult: Equatable, Sendable {
-    let stdout: String
-    let stderr: String
-    let exitCode: Int32
-    var timedOut = false
-    var succeeded: Bool { exitCode == 0 && !timedOut }
-    var failureMessage: String {
+public struct CommandResult: Equatable, Sendable {
+    public let stdout: String
+    public let stderr: String
+    public let exitCode: Int32
+    public var timedOut = false
+    public var succeeded: Bool { exitCode == 0 && !timedOut }
+    public var failureMessage: String {
         let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
         if timedOut { return "Command timed out.\(detail.isEmpty ? "" : "\n" + detail)" }
         return detail.isEmpty ? "Command failed (exit \(exitCode))." : detail

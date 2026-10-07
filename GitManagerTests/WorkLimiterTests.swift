@@ -1,5 +1,5 @@
 import XCTest
-@testable import GitManager
+@testable import GitManagerCore
 
 private actor ConcurrencyProbe {
     var active = 0

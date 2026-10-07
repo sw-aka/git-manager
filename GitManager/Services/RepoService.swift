@@ -1,20 +1,20 @@
 import Foundation
 
-struct RepoSnapshot: Sendable {
-    var status: RepoStatus
-    var commits: [Commit]
+public struct RepoSnapshot: Sendable {
+    public var status: RepoStatus
+    public var commits: [Commit]
 }
 
-struct SyncOutcome: Sendable {
-    let result: CommandResult
-    let snapshot: RepoSnapshot
+public struct SyncOutcome: Sendable {
+    public let result: CommandResult
+    public let snapshot: RepoSnapshot
 }
 
-struct RepoService: Sendable {
+public struct RepoService: Sendable {
     let runner: any GitRunner
 
     init(runner: any GitRunner) { self.runner = runner }
-    init(location: RepoLocation) {
+    public init(location: RepoLocation) {
         switch location.source {
         case .local: runner = LocalGitRunner(path: location.path)
         case .remote(var source):
@@ -23,7 +23,7 @@ struct RepoService: Sendable {
         }
     }
 
-    func snapshot(lastFetch: Date? = nil, operationError: String? = nil) async -> RepoSnapshot {
+    public func snapshot(lastFetch: Date? = nil, operationError: String? = nil) async -> RepoSnapshot {
         let result = await runner.run(args: ["status", "--porcelain=v2", "--branch", "-z"], timeout: 15)
         guard result.succeeded else {
             var status = RepoStatus()
@@ -62,11 +62,11 @@ struct RepoService: Sendable {
         return RepoSnapshot(status: status, commits: commits)
     }
 
-    func fetch() async -> CommandResult {
+    public func fetch() async -> CommandResult {
         await runner.run(args: ["fetch", "--prune"], timeout: 60)
     }
 
-    func sync(lastFetch: Date? = nil) async -> SyncOutcome {
+    public func sync(lastFetch: Date? = nil) async -> SyncOutcome {
         let before = await snapshot(lastFetch: lastFetch)
         var updatedFetch = lastFetch
         let result: CommandResult
