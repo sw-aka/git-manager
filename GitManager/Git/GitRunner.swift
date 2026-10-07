@@ -51,4 +51,3 @@ struct SSHGitRunner: GitRunner {
         return await executor.run(command(args: args), timeout: timeout)
     }
 }
-
