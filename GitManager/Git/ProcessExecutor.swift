@@ -93,36 +93,100 @@ struct ProcessExecutor: Sendable {
     private static func execute(
         _ command: CommandInvocation, timeout: TimeInterval, environment: [String: String]
     ) -> CommandResult {
-        let process = Process()
+        guard !([command.executable] + command.arguments).contains(where: { $0.contains("\0") }) else {
+            return CommandResult(stdout: "", stderr: "Command arguments cannot contain NUL bytes.", exitCode: -1)
+        }
         let capture = ProcessCapture()
-        process.executableURL = URL(fileURLWithPath: command.executable)
-        process.arguments = command.arguments
-        process.environment = environment
-        process.standardInput = FileHandle.nullDevice
-        process.standardOutput = capture.stdout
-        process.standardError = capture.stderr
-        let finished = DispatchSemaphore(value: 0)
-        process.terminationHandler = { _ in finished.signal() }
-        do {
-            try process.run()
-        } catch {
-            return CommandResult(stdout: "", stderr: error.localizedDescription, exitCode: -1)
+        var actions: posix_spawn_file_actions_t?
+        var attributes: posix_spawnattr_t?
+        var code = posix_spawn_file_actions_init(&actions)
+        guard code == 0 else { return spawnFailure(code) }
+        defer { posix_spawn_file_actions_destroy(&actions) }
+        code = posix_spawnattr_init(&attributes)
+        guard code == 0 else { return spawnFailure(code) }
+        defer { posix_spawnattr_destroy(&attributes) }
+
+        var emptyMask = sigset_t()
+        sigemptyset(&emptyMask)
+        var defaultSignals = sigset_t()
+        sigemptyset(&defaultSignals)
+        for signal in [SIGTERM, SIGINT, SIGPIPE] { sigaddset(&defaultSignals, signal) }
+        let setup = [
+            posix_spawnattr_setflags(&attributes, Int16(POSIX_SPAWN_SETPGROUP | POSIX_SPAWN_CLOEXEC_DEFAULT
+                | POSIX_SPAWN_SETSIGMASK | POSIX_SPAWN_SETSIGDEF)),
+            posix_spawnattr_setpgroup(&attributes, 0),
+            posix_spawnattr_setsigmask(&attributes, &emptyMask),
+            posix_spawnattr_setsigdefault(&attributes, &defaultSignals),
+            posix_spawn_file_actions_addopen(&actions, STDIN_FILENO, "/dev/null", O_RDONLY, 0),
+            posix_spawn_file_actions_adddup2(&actions, capture.stdout.fileHandleForWriting.fileDescriptor, STDOUT_FILENO),
+            posix_spawn_file_actions_adddup2(&actions, capture.stderr.fileHandleForWriting.fileDescriptor, STDERR_FILENO)
+        ]
+        if let failure = setup.first(where: { $0 != 0 }) { return spawnFailure(failure) }
+        for handle in [capture.stdout.fileHandleForReading, capture.stdout.fileHandleForWriting,
+                       capture.stderr.fileHandleForReading, capture.stderr.fileHandleForWriting]
+            where handle.fileDescriptor > STDERR_FILENO {
+            code = posix_spawn_file_actions_addclose(&actions, handle.fileDescriptor)
+            guard code == 0 else { return spawnFailure(code) }
         }
 
+        var pid: pid_t = 0
+        code = withCStringArray([command.executable] + command.arguments) { argv in
+            withCStringArray(environment.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }) { envp in
+                command.executable.withCString {
+                    posix_spawn(&pid, $0, &actions, &attributes, argv, envp)
+                }
+            }
+        }
+        guard code == 0 else { return spawnFailure(code) }
+        // The parent must close its write ends so normal child exit produces EOF.
+        try? capture.stdout.fileHandleForWriting.close()
+        try? capture.stderr.fileHandleForWriting.close()
         let drains = DispatchGroup()
         DispatchQueue.global(qos: .utility).async(group: drains) { capture.drainOutput() }
         DispatchQueue.global(qos: .utility).async(group: drains) { capture.drainError() }
-        let timedOut = finished.wait(timeout: .now() + max(0, timeout)) == .timedOut
-        if timedOut {
-            if process.isRunning { process.terminate() }
-            if finished.wait(timeout: .now() + 2) == .timedOut {
-                if process.isRunning { kill(process.processIdentifier, SIGKILL) }
-                finished.wait()
+
+        let deadline = DispatchTime.now() + max(0, timeout)
+        var status: Int32 = 0
+        var timedOut = false
+        while true {
+            let waited = waitpid(pid, &status, WNOHANG)
+            if waited == pid { break }
+            if waited == -1 && errno != EINTR {
+                capture.finish()
+                drains.wait()
+                return spawnFailure(errno)
             }
+            if DispatchTime.now() >= deadline {
+                timedOut = true
+                // SETPGROUP makes the PID the group ID atomically before exec.
+                // Keep the leader unreaped during grace so this ID cannot be reused.
+                kill(-pid, SIGTERM)
+                let grace = DispatchTime.now() + 2
+                while DispatchTime.now() < grace { _ = poll(nil, 0, 10) }
+                // Always kill the group, even if its leader exited on SIGTERM.
+                kill(-pid, SIGKILL)
+                while waitpid(pid, &status, 0) == -1 && errno == EINTR {}
+                break
+            }
+            _ = poll(nil, 0, 10)
         }
         capture.finish()
         drains.wait()
         let (stdout, stderr) = capture.strings()
-        return CommandResult(stdout: stdout, stderr: stderr, exitCode: process.terminationStatus, timedOut: timedOut)
+        let signal = status & 0x7f
+        let exitCode = signal == 0 ? (status >> 8) & 0xff : signal
+        return CommandResult(stdout: stdout, stderr: stderr, exitCode: exitCode, timedOut: timedOut)
+    }
+
+    private static func spawnFailure(_ code: Int32) -> CommandResult {
+        CommandResult(stdout: "", stderr: String(cString: strerror(code)), exitCode: -1)
+    }
+
+    private static func withCStringArray<T>(
+        _ values: [String], body: (UnsafeMutablePointer<UnsafeMutablePointer<CChar>?>) -> T
+    ) -> T {
+        var pointers = values.map { strdup($0) } + [nil]
+        defer { for pointer in pointers { free(pointer) } }
+        return pointers.withUnsafeMutableBufferPointer { body($0.baseAddress!) }
     }
 }

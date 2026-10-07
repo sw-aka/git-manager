@@ -40,6 +40,27 @@ final class ProcessExecutorTests: XCTestCase {
         XCTAssertEqual(result.stdout, values.joined(separator: "\0") + "\0")
     }
 
+    func testTimeoutKillsDescendantEvenAfterLeaderExitsOnTERM() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-process-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sentinel = root.appendingPathComponent("must-not-appear")
+        // The leader exits on TERM. Its child ignores TERM and writes only after
+        // the two-second grace period, reproducing an escaped hook/transport.
+        let childScript = "trap '' TERM; sleep 4; printf escaped > " + SSHGitRunner.quote(sentinel.path)
+        let leaderScript = "/bin/sh -c " + SSHGitRunner.quote(childScript) + " & echo $!; wait"
+        let start = Date()
+        let result = await ProcessExecutor().run(
+            CommandInvocation(executable: "/bin/sh", arguments: ["-c", leaderScript]), timeout: 0.3
+        )
+        XCTAssertTrue(result.timedOut)
+        XCTAssertFalse(result.succeeded)
+        XCTAssertGreaterThanOrEqual(Date().timeIntervalSince(start), 2)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 5)
+        try await Task.sleep(for: .seconds(max(0, 5 - Date().timeIntervalSince(start))))
+        XCTAssertFalse(FileManager.default.fileExists(atPath: sentinel.path), "A descendant kept working after timeout")
+    }
+
     func testHomeDirectoryExpansionPreservesQuotedRest() async throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-home-\(UUID())")
         let directory = root.appendingPathComponent("repo's $(false)")
