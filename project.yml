@@ -1,0 +1,45 @@
+name: GitManager
+options:
+  deploymentTarget:
+    macOS: '15.0'
+settings:
+  base:
+    SWIFT_VERSION: '6.0'
+    SWIFT_STRICT_CONCURRENCY: complete
+    MACOSX_DEPLOYMENT_TARGET: '15.0'
+    CODE_SIGN_IDENTITY: '-'
+    CODE_SIGNING_REQUIRED: YES
+    ENABLE_APP_SANDBOX: NO
+    ENABLE_HARDENED_RUNTIME: NO
+    GENERATE_INFOPLIST_FILE: YES
+    SWIFT_TREAT_WARNINGS_AS_ERRORS: YES
+targets:
+  GitManager:
+    type: application
+    platform: macOS
+    sources: [GitManager]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager
+        INFOPLIST_KEY_CFBundleDisplayName: Git Manager
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
+  GitManagerTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources: [GitManagerTests]
+    dependencies:
+      - target: GitManager
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager.tests
+schemes:
+  GitManager:
+    build:
+      targets:
+        GitManager: all
+    test:
+      targets: [GitManagerTests]
+      environmentVariables:
+        GIT_MANAGER_DATA_DIR: $(PROJECT_DIR)/build/TestingAppState
+    run:
+      config: Debug
