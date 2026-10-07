@@ -8,8 +8,11 @@ Requires macOS 15+, Xcode, and XcodeGen. No third-party dependencies.
 make gen
 make build
 make test
+make smoke
 make run
 ```
+
+The app embeds the GitManagerCore framework for models, Git/services, and Foundation/Observation app state. Tests run unhosted via `xcrun xctest`; `make smoke` checks that the Release app stays alive for five seconds. When `NONO_CAP_FILE` is set, make disables the Swift macro plugin sandbox for xcodebuild.
 
 Add a local repository or a parent folder; Git Manager discovers repositories up to two directory levels down, skipping hidden folders and node_modules. Add remote repositories with an SSH host (including aliases or user@host), optional port, and absolute path. Existing SSH configuration and authentication apply.
 
