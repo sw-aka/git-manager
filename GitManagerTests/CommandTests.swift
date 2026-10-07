@@ -119,8 +119,6 @@ final class CommandTests: XCTestCase {
             XCTAssertEqual(RemoteRepoSource.normalizedPath(path), expected, path)
             XCTAssertEqual(RemoteRepoSource.normalizedPath(expected), expected, "Normalization must be idempotent")
         }
-        XCTAssertEqual(RemoteRepoSource.normalizedHost("CaseSensitiveUser@EXAMPLE.COM"), "CaseSensitiveUser@example.com")
-        XCTAssertEqual(RemoteRepoSource.normalizedHost("WORK-HOST"), "work-host")
     }
 
     func testRemoteIdentityNormalizesPersistedAndMutatedSources() {
@@ -128,7 +126,6 @@ final class CommandTests: XCTestCase {
         let expected = RepoLocation(source: .remote(canonical), path: canonical.path).id
         for spelling in ["/srv/repo/", "/srv/./repo", "/srv//group/../repo/"] {
             var raw = canonical
-            raw.host = "User@HOST"
             raw.path = spelling
             XCTAssertEqual(RepoLocation(source: .remote(raw), path: spelling).id, expected)
         }
@@ -137,5 +134,22 @@ final class CommandTests: XCTestCase {
         let explicitPort = RemoteRepoSource(host: canonical.host, port: 22, path: canonical.path)
         XCTAssertNotEqual(RepoLocation(source: .remote(explicitPort), path: explicitPort.path).id, expected,
                           "An omitted port must continue to respect SSH config")
+    }
+
+    func testSSHHostSpellingIsPreservedInCommandsURIsAndIdentity() throws {
+        for host in ["MIXED-ALIAS", "CaseSensitiveUser@MiXeD-Host", "user@[FE80::1]"] {
+            let remote = RemoteRepoSource(host: host, path: "/srv/./repo/")
+            XCTAssertEqual(remote.host, host)
+            XCTAssertEqual(remote.normalized.host, host)
+            let command = SSHGitRunner(source: remote).command(args: ["fetch"])
+            XCTAssertEqual(command.arguments[command.arguments.count - 2], host)
+            let location = RepoLocation(source: .remote(remote), path: remote.path)
+            guard case .remote(let source) = location.source else { return XCTFail("Not a remote source") }
+            XCTAssertEqual(source.host, host)
+            let uri = try ZedLauncher.remoteURI(source)
+            XCTAssertEqual(uri, "ssh://" + host + "/srv/repo")
+            let changedSpelling = RemoteRepoSource(host: host.lowercased(), path: "/srv/repo")
+            XCTAssertNotEqual(location.id, RepoLocation(source: .remote(changedSpelling), path: changedSpelling.path).id)
+        }
     }
 }

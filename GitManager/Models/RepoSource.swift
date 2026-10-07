@@ -19,18 +19,13 @@ public struct RemoteRepoSource: Codable, Hashable, Sendable, Identifiable {
 
     public init(id: UUID = UUID(), host: String, port: Int? = nil, path: String) {
         self.id = id
-        self.host = Self.normalizedHost(host)
+        self.host = host
         self.port = port
         self.path = Self.normalizedPath(path)
     }
 
     public var normalized: Self {
         Self(id: id, host: host, port: port, path: path)
-    }
-
-    public static func normalizedHost(_ host: String) -> String {
-        guard let separator = host.lastIndex(of: "@") else { return host.lowercased() }
-        return String(host[...separator]) + host[host.index(after: separator)...].lowercased()
     }
 
     public static func normalizedPath(_ path: String) -> String {

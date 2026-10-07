@@ -153,7 +153,6 @@ final class AppModelTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: root) }
         let first = RepoSource.remote(RemoteRepoSource(host: "user@host", port: 2222, path: "~/repo"))
         var raw = RemoteRepoSource(host: "user@host", port: 2222, path: "~/repo")
-        raw.host = "user@HOST"
         raw.path = "~//group/.././repo/"
         let second = RepoSource.remote(raw)
         let otherPort = RepoSource.remote(RemoteRepoSource(host: "user@host", port: 2223, path: "~/repo"))
@@ -185,15 +184,14 @@ final class AppModelTests: XCTestCase {
     func testAddRemoteRefusesEquivalentIdentityAndPersistsNormalizedSource() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        var oldSource = RemoteRepoSource(host: "User@host", path: "/srv/repo")
-        oldSource.host = "User@HOST"
+        var oldSource = RemoteRepoSource(host: "User@HOST", path: "/srv/repo")
         oldSource.path = "/srv/./repo/"
         let store = Store(directory: root)
         try store.save(StoredState(sources: [.remote(oldSource)]))
         let runner = ControlledRunner()
         let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
         for path in ["/srv/repo/", "/srv/./repo", "/srv//other/../repo/"] {
-            XCTAssertThrowsError(try model.addRemote(RemoteRepoSource(host: "User@host", path: path))) { error in
+            XCTAssertThrowsError(try model.addRemote(RemoteRepoSource(host: "User@HOST", path: path))) { error in
                 XCTAssertTrue(error.localizedDescription.contains("already added"))
             }
         }
@@ -201,11 +199,28 @@ final class AppModelTests: XCTestCase {
         try model.addRemote(RemoteRepoSource(host: "User@OTHER-HOST", port: 2222, path: "~//other/../repo/"))
         let stored = try store.load()
         guard case .remote(let added) = stored.sources.last else { return XCTFail("Remote source was not saved") }
-        XCTAssertEqual(added.host, "User@other-host")
+        XCTAssertEqual(added.host, "User@OTHER-HOST")
         XCTAssertEqual(added.path, "~/repo")
         XCTAssertEqual(added.port, 2222)
         await model.refreshAll(fetch: false)
         XCTAssertEqual(model.repos.count, 2)
+    }
+
+    func testCaseDistinctSSHAliasesRemainSeparateAfterAddingAndLoading() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = Store(directory: root)
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        try model.addRemote(RemoteRepoSource(host: "MIXED-ALIAS", path: "/srv/./repo/"))
+        try model.addRemote(RemoteRepoSource(host: "mixed-alias", path: "/srv/repo"))
+        XCTAssertEqual(model.sources.count, 2)
+        let restored = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await restored.refreshAll(fetch: false)
+        XCTAssertEqual(restored.repos.count, 2)
+        XCTAssertEqual(Set(restored.sources.map(\.title)), ["MIXED-ALIAS", "mixed-alias"])
+        XCTAssertThrowsError(try restored.addRemote(RemoteRepoSource(host: "MIXED-ALIAS", path: "/srv//repo/")))
+        await model.refreshAll(fetch: false)
     }
 
     func testSourceScanErrorsKeepAccessibleReposAndClearAfterRecovery() async throws {
