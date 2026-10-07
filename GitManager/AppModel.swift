@@ -11,10 +11,11 @@ public final class AppModel {
     public private(set) var isRefreshing = false
     public var message: String?
     public var needsAttentionOnly = false
-    public var selection: String?
+    public var selection: Set<String> = []
 
     @ObservationIgnored private let store: Store
     @ObservationIgnored private let serviceFactory: @Sendable (RepoLocation) -> RepoService
+    @ObservationIgnored private let saveState: (StoredState) throws -> Void
     @ObservationIgnored private var persistenceEnabled = true
     @ObservationIgnored private let limiter = WorkLimiter()
     @ObservationIgnored private var timer: Task<Void, Never>?
@@ -24,9 +25,11 @@ public final class AppModel {
         self.init(store: store, serviceFactory: { RepoService(location: $0) })
     }
 
-    init(store: Store, serviceFactory: @escaping @Sendable (RepoLocation) -> RepoService) {
+    init(store: Store, serviceFactory: @escaping @Sendable (RepoLocation) -> RepoService,
+         saveState: ((StoredState) throws -> Void)? = nil) {
         self.store = store
         self.serviceFactory = serviceFactory
+        self.saveState = saveState ?? { try store.save($0) }
         do {
             let loaded = try store.loadRecovering()
             sources = loaded.state.sources.map { source in
@@ -45,7 +48,11 @@ public final class AppModel {
     public var visibleRepos: [RepoRecord] { repos.filter { !needsAttentionOnly || $0.status.needsAttention } }
     public var syncRepos: [RepoRecord] { repos.filter { $0.status.needsSync } }
     public var menuBarTitle: String { syncRepos.isEmpty ? "" : String(syncRepos.count) }
-    public var selectedRepo: RepoRecord? { repos.first { $0.id == selection } }
+    public var selectedRepos: [RepoRecord] { repos.filter { selection.contains($0.id) } }
+    public var selectedRepo: RepoRecord? { selection.count == 1 ? selectedRepos.first : nil }
+    public var selectedRemovalPlan: SourceRemovalPlan {
+        SourceRemovalPlan.forRepositories(selection, sources: sources, repos: repos)
+    }
 
     public func start() async {
         guard !started else { return }
@@ -95,19 +102,24 @@ public final class AppModel {
     }
 
     public func removeSource(_ sourceID: UUID) {
-        sources.removeAll { $0.id == sourceID }
-        sourceScanErrors.removeValue(forKey: sourceID)
+        removeSources([sourceID])
+    }
+
+    public func removeSources(_ ids: Set<UUID>) {
+        guard sources.contains(where: { ids.contains($0.id) }) else { return }
+        sources.removeAll { ids.contains($0.id) }
+        sourceScanErrors = sourceScanErrors.filter { !ids.contains($0.key) }
         repos = repos.compactMap { repo in
-            let remaining = repo.locations.filter { $0.source.id != sourceID }
+            let remaining = repo.locations.filter { !ids.contains($0.source.id) }
             return remaining.isEmpty ? nil : repo.withLocations(remaining)
         }
-        if !repos.contains(where: { $0.id == selection }) { selection = nil }
+        selection.formIntersection(repos.map(\.id))
         persist()
     }
 
     private func persist() {
         guard persistenceEnabled else { return }
-        do { try store.save(StoredState(sources: sources, settings: settings)) }
+        do { try saveState(StoredState(sources: sources, settings: settings)) }
         catch { message = "Could not save sources and settings: \(error.localizedDescription)" }
     }
 
@@ -149,7 +161,7 @@ public final class AppModel {
             }
         }
         repos = consolidated
-        if !repos.contains(where: { $0.id == selection }) { selection = nil }
+        selection.formIntersection(repos.map(\.id))
     }
 
     public func refreshAll(fetch: Bool = true) async {

@@ -128,11 +128,11 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(fetches, 1, "Two sources started operations on the same repository")
         // Removing the primary source during an operation preserves its identity,
         // selection, status, and lock when another source still provides the repo.
-        model.selection = record.id
+        model.selection = [record.id]
         model.removeSource(parent.id)
         XCTAssertEqual(model.repos.count, 1)
         XCTAssertEqual(model.repos.first?.sourceIDs, [direct.id, linked.id])
-        XCTAssertEqual(model.selection, record.id)
+        XCTAssertEqual(model.selection, [record.id])
         XCTAssertEqual(model.busy, [record.id])
         await model.refreshAll(fetch: false)
         XCTAssertEqual(model.repos.count, 1)
@@ -145,7 +145,7 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repos.count, 1)
         model.removeSource(linked.id)
         XCTAssertTrue(model.repos.isEmpty)
-        XCTAssertNil(model.selection)
+        XCTAssertTrue(model.selection.isEmpty)
     }
 
     func testRemoteIdentityAndRemovalKeepOtherProvider() async throws {
@@ -179,6 +179,62 @@ final class AppModelTests: XCTestCase {
         model.removeSource(first.id)
         XCTAssertEqual(model.repos.count, 2)
         XCTAssertEqual(model.repos.first { $0.id == shared.id }?.sourceIDs, [second.id])
+    }
+
+    func testBulkRemovalSavesOnceAndKeepsOtherProvidersAndSelections() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sharedURL = root.appendingPathComponent("shared")
+        let exclusiveURL = root.appendingPathComponent("exclusive")
+        for url in [sharedURL, exclusiveURL] {
+            try FileManager.default.createDirectory(at: url.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        }
+        let folder = RepoSource.local(LocalFolderSource(path: root.path))
+        let direct = RepoSource.local(LocalFolderSource(path: sharedURL.path))
+        let missing = RepoSource.local(LocalFolderSource(path: root.appendingPathComponent("missing").path))
+        let remote = RepoSource.remote(RemoteRepoSource(host: "host", path: "/remove"))
+        let keptRemote = RepoSource.remote(RemoteRepoSource(host: "host", path: "/keep"))
+        let store = Store(directory: root.appendingPathComponent("state"))
+        try store.save(StoredState(sources: [folder, direct, missing, remote, keptRemote]))
+        var savedStates: [StoredState] = []
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) }, saveState: {
+            savedStates.append($0)
+            try store.save($0)
+        })
+        model.selection = ["stale selection"]
+        await model.refreshAll(fetch: false)
+        XCTAssertTrue(model.selection.isEmpty, "Rescanning must clear stale selections")
+        let shared = try XCTUnwrap(model.repos.first { $0.sourceIDs.contains(direct.id) })
+        let kept = try XCTUnwrap(model.repos.first { $0.sourceIDs.contains(keptRemote.id) })
+        model.selection = Set(model.repos.map(\.id))
+        XCTAssertNil(model.selectedRepo)
+        XCTAssertEqual(model.selectedRepos.count, 4)
+        XCTAssertNotNil(model.sourceScanErrors[missing.id])
+
+        model.removeSources([folder.id, missing.id, remote.id])
+
+        XCTAssertEqual(savedStates.count, 1)
+        XCTAssertEqual(Set(savedStates[0].sources.map(\.id)), [direct.id, keptRemote.id])
+        XCTAssertEqual(Set(try store.load().sources.map(\.id)), [direct.id, keptRemote.id])
+        XCTAssertEqual(model.sources.map(\.id), [direct.id, keptRemote.id])
+        XCTAssertEqual(Set(model.repos.map(\.id)), [shared.id, kept.id])
+        XCTAssertEqual(model.repos.first { $0.id == shared.id }?.sourceIDs, [direct.id])
+        XCTAssertEqual(model.repos.first { $0.id == shared.id }?.status, shared.status)
+        XCTAssertEqual(model.selection, [shared.id, kept.id])
+        XCTAssertTrue(model.sourceScanErrors.isEmpty)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exclusiveURL.path), "Removal must leave files on disk")
+
+        model.removeSources([])
+        model.removeSources([UUID()])
+        XCTAssertEqual(savedStates.count, 1, "Empty and stale plans must not save")
+        model.removeSource(keptRemote.id)
+        XCTAssertEqual(savedStates.count, 2, "Single removal must use the same persistence path")
+        XCTAssertEqual(model.selection, [shared.id])
+        XCTAssertEqual(model.selectedRepo?.id, shared.id)
+        model.removeSource(direct.id)
+        XCTAssertTrue(model.selection.isEmpty)
+        XCTAssertNil(model.selectedRepo)
     }
 
     func testAddRemoteRefusesEquivalentIdentityAndPersistsNormalizedSource() async throws {
