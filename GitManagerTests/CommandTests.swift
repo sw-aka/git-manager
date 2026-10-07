@@ -38,6 +38,27 @@ final class CommandTests: XCTestCase {
         XCTAssertThrowsError(try RemoteRepoSource(host: "host", port: 65536, path: "/repo").validate())
         XCTAssertThrowsError(try RemoteRepoSource(host: "host", path: "relative").validate())
     }
+    func testHomeRelativeSSHPathsAreValidatedAndSafelyQuoted() throws {
+        for path in ["~", "~/", "~/repo's space"] {
+            try RemoteRepoSource(host: "host", path: path).validate()
+        }
+        for path in ["~other/repo", "repo", "", "~/repo\nnext"] {
+            XCTAssertThrowsError(try RemoteRepoSource(host: "host", path: path).validate())
+        }
+        XCTAssertEqual(SSHGitRunner.directoryArgument("~"), "~")
+        XCTAssertEqual(SSHGitRunner.directoryArgument("~/"), "~/''")
+        let remote = RemoteRepoSource(host: "host", path: "~/repo's space $(false)")
+        let command = SSHGitRunner(source: remote).command(args: ["status"])
+        XCTAssertTrue(command.arguments.last?.hasPrefix("cd ~/'repo'\\''s space $(false)' && ") == true)
+    }
+
+    func testZedHomeRelativeURI() throws {
+        let remote = RemoteRepoSource(host: "user@host", port: 2222, path: "~/my repo/名")
+        let command = try ZedLauncher.command(for: RepoLocation(source: .remote(remote), path: remote.path), cliExists: true, appExists: true)
+        XCTAssertEqual(command.arguments, ["ssh://user@host:2222/~/my%20repo/%E5%90%8D"])
+        XCTAssertEqual(try ZedLauncher.remoteURI(RemoteRepoSource(host: "host", path: "~")), "ssh://host/~")
+    }
+
     func testZedLocalCLIAndFallback() throws {
         let source = RepoSource.local(LocalFolderSource(path: "/tmp/repo's folder"))
         let location = RepoLocation(source: source, path: "/tmp/repo's folder")

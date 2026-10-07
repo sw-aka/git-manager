@@ -40,6 +40,23 @@ final class ProcessExecutorTests: XCTestCase {
         XCTAssertEqual(result.stdout, values.joined(separator: "\0") + "\0")
     }
 
+    func testHomeDirectoryExpansionPreservesQuotedRest() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-home-\(UUID())")
+        let directory = root.appendingPathComponent("repo's $(false)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        var environment = ProcessExecutor.userEnvironment
+        environment["HOME"] = root.path
+        for (path, expected) in [("~", root), ("~/repo's $(false)", directory)] {
+            let script = "cd \(SSHGitRunner.directoryArgument(path)) && printf '%s' \"$PWD\""
+            let result = await ProcessExecutor(environment: environment).run(
+                CommandInvocation(executable: "/bin/sh", arguments: ["-c", script]), timeout: 2
+            )
+            XCTAssertTrue(result.succeeded, result.failureMessage)
+            XCTAssertEqual(RepoLocation.canonicalLocalPath(result.stdout), RepoLocation.canonicalLocalPath(expected.path))
+        }
+    }
+
     func testMissingExecutableIsAnError() async {
         let result = await ProcessExecutor().run(CommandInvocation(executable: "/nonexistent/gitmanager-test", arguments: []), timeout: 1)
         XCTAssertFalse(result.succeeded)

@@ -30,6 +30,11 @@ struct SSHGitRunner: GitRunner {
     static func quote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
+    static func directoryArgument(_ path: String) -> String {
+        if path == "~" { return "~" }
+        if path.hasPrefix("~/") { return "~/" + quote(String(path.dropFirst(2))) }
+        return quote(path)
+    }
     func command(args: [String]) -> CommandInvocation {
         // -- ends SSH options BEFORE the host; putting it after the host runs it remotely.
         var arguments = [
@@ -38,7 +43,7 @@ struct SSHGitRunner: GitRunner {
             "-o", "ControlPersist=300"
         ]
         if let port = source.port { arguments += ["-p", String(port)] }
-        let remoteCommand = "cd " + Self.quote(source.path)
+        let remoteCommand = "cd " + Self.directoryArgument(source.path)
             + " && " + (["env", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "git"]
                 + args).map(Self.quote).joined(separator: " ")
         arguments += ["--", source.host, remoteCommand]

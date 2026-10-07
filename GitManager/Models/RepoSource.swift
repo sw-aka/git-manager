@@ -35,8 +35,8 @@ public struct RemoteRepoSource: Codable, Hashable, Sendable, Identifiable {
         if let port, !(1...65535).contains(port) {
             throw ValidationError.message("Port must be between 1 and 65535.")
         }
-        guard path.hasPrefix("/"), !path.contains("\0"), !path.contains("\n"), !path.contains("\r") else {
-            throw ValidationError.message("The remote repository path must be absolute.")
+        guard (path.hasPrefix("/") || path == "~" || path.hasPrefix("~/")), !path.contains("\0"), !path.contains("\n"), !path.contains("\r") else {
+            throw ValidationError.message("Use an absolute path or a home-relative path (~ or ~/...).")
         }
     }
 }

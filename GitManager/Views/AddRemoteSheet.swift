@@ -15,7 +15,7 @@ struct AddRemoteSheet: View {
             Form {
                 TextField("SSH host", text: $host, prompt: Text("alias or user@host"))
                 TextField("Port (optional)", text: $port, prompt: Text("22"))
-                TextField("Absolute path", text: $path, prompt: Text("/home/user/project"))
+                TextField("Repository path", text: $path, prompt: Text("/home/user/project or ~/project"))
             }
             Text("Uses your existing SSH configuration and agent. Each remote repository is added individually.")
                 .font(.caption).foregroundStyle(.secondary)

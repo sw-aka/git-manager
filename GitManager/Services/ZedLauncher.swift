@@ -19,7 +19,7 @@ public struct ZedLauncher: Sendable {
         components.user = username
         components.host = hostname
         components.port = source.port
-        components.path = source.path
+        components.path = source.path.hasPrefix("/") ? source.path : "/" + source.path
         guard let uri = components.string else { throw ValidationError.message("Cannot build the Zed SSH URL.") }
         return uri
     }
