@@ -18,7 +18,9 @@ struct RepoDetail: View {
                 HStack {
                     Label(repo.status.branch, systemImage: "arrow.triangle.branch")
                     Text(repo.status.badge).foregroundStyle(.secondary)
-                    if repo.status.dirtyCount > 0 { Label("\(repo.status.dirtyCount) changed", systemImage: "circle.fill").foregroundStyle(.orange) }
+                    if repo.status.dirtyCount > 0 || repo.status.dirtyCountIsLowerBound {
+                        Label("\(repo.status.dirtyCountText) changed", systemImage: "circle.fill").foregroundStyle(.orange)
+                    }
                 }.font(.callout)
                 if let upstream = repo.status.upstream { Text("Upstream: \(upstream)").font(.caption).foregroundStyle(.secondary) }
                 Text(repo.status.lastFetch.map { "Last fetched \(RelativeTime.string($0))" } ?? "Not fetched yet")

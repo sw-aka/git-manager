@@ -8,6 +8,7 @@ public struct RepoStatus: Equatable, Sendable {
     public var ahead = 0
     public var behind = 0
     public var dirtyCount = 0
+    public var dirtyCountIsLowerBound = false
     public var unmergedCount = 0
     public var isDetached = false
     public var isUnborn = false
@@ -17,10 +18,11 @@ public struct RepoStatus: Equatable, Sendable {
     public init() {}
 
     public var canSync: Bool {
-        !isDetached && branch != "unknown" && !isUnborn && (upstream != nil || hasOrigin)
+        !dirtyCountIsLowerBound && !isDetached && branch != "unknown" && !isUnborn && (upstream != nil || hasOrigin)
     }
+    public var dirtyCountText: String { String(dirtyCount) + (dirtyCountIsLowerBound ? "+" : "") }
     public var needsSync: Bool { ahead > 0 || behind > 0 || (upstream == nil && canSync) }
-    public var needsAttention: Bool { needsSync || dirtyCount > 0 || error != nil || upstreamGone }
+    public var needsAttention: Bool { needsSync || dirtyCount > 0 || dirtyCountIsLowerBound || error != nil || upstreamGone }
     public var badge: String {
         if isDetached { return "detached" }
         if upstream == nil { return "no upstream" }

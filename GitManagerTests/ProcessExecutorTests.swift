@@ -34,6 +34,7 @@ final class ProcessExecutorTests: XCTestCase {
         )
         XCTAssertEqual(result.exitCode, 0)
         XCTAssertFalse(result.timedOut)
+        XCTAssertTrue(result.truncated)
         XCTAssertLessThan(Date().timeIntervalSince(start), 2)
         XCTAssertTrue(FileManager.default.fileExists(atPath: groupFile.path))
         XCTAssertLessThanOrEqual(result.stdout.utf8.count, ProcessExecutor.maximumCapturedBytes)
@@ -50,6 +51,7 @@ final class ProcessExecutorTests: XCTestCase {
             + "/usr/bin/yes e 2>/dev/null | /usr/bin/head -c 50000000 >&2; printf 'stderr-tail' >&2"
         let result = await ProcessExecutor().run(CommandInvocation(executable: "/bin/sh", arguments: ["-c", script]), timeout: 15)
         XCTAssertTrue(result.succeeded, result.failureMessage)
+        XCTAssertTrue(result.truncated)
         XCTAssertEqual(result.stdout.utf8.count, ProcessExecutor.maximumCapturedBytes)
         XCTAssertEqual(result.stderr.utf8.count, ProcessExecutor.maximumCapturedBytes)
         XCTAssertTrue(result.stdout.hasPrefix("stdout-head\n"))
@@ -60,6 +62,18 @@ final class ProcessExecutorTests: XCTestCase {
         XCTAssertFalse(result.stderr.contains("stderr-tail"))
     }
 
+    func testTruncatedFlagReportsEitherStreamIndependently() async {
+        for redirect in ["", " >&2"] {
+            let result = await ProcessExecutor().run(CommandInvocation(executable: "/bin/sh", arguments: ["-c",
+                "/usr/bin/yes output 2>/dev/null | /usr/bin/head -c 5000000" + redirect
+            ]), timeout: 5)
+            XCTAssertTrue(result.succeeded, result.failureMessage)
+            XCTAssertTrue(result.truncated)
+            XCTAssertTrue((redirect.isEmpty ? result.stdout : result.stderr).hasSuffix(ProcessExecutor.truncationMarker))
+            XCTAssertEqual(redirect.isEmpty ? result.stderr : result.stdout, "")
+        }
+    }
+
     func testRepeatedCommandsDoNotLeakPipeDescriptors() async {
         let command = CommandInvocation(executable: "/bin/sh", arguments: ["-c", "printf output; printf error >&2"])
         let executor = ProcessExecutor()
@@ -68,6 +82,7 @@ final class ProcessExecutorTests: XCTestCase {
         for _ in 0..<40 {
             let result = await executor.run(command, timeout: 2)
             XCTAssertTrue(result.succeeded, result.failureMessage)
+            XCTAssertFalse(result.truncated)
             XCTAssertEqual(result.stdout, "output")
             XCTAssertEqual(result.stderr, "error")
         }

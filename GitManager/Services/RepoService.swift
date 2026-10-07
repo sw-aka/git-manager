@@ -13,6 +13,7 @@ public struct SyncOutcome: Sendable {
 public struct RepoService: Sendable {
     let runner: any GitRunner
     private static let statusArguments = ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"]
+    private static let incompleteStatusMessage = "Status output was truncated. Changed-file count is a lower bound. Sync is disabled because unmerged files may be missing."
 
     init(runner: any GitRunner) { self.runner = runner }
     public init(location: RepoLocation) {
@@ -32,9 +33,10 @@ public struct RepoService: Sendable {
             status.error = [operationError, result.failureMessage].compactMap { $0 }.joined(separator: "\n")
             return RepoSnapshot(status: status, commits: [])
         }
-        var status = GitParser.status(result.stdout)
+        var status = GitParser.status(result.stdout, truncated: result.truncated)
         status.lastFetch = lastFetch
         var errors = [operationError].compactMap { $0 }
+        if result.truncated { errors.append(Self.incompleteStatusMessage) }
         let remotes = await runner.run(args: ["remote"], timeout: 15)
         if remotes.succeeded {
             status.hasOrigin = remotes.stdout.split(separator: "\n").contains("origin")
@@ -71,7 +73,9 @@ public struct RepoService: Sendable {
         let before = await snapshot(lastFetch: lastFetch)
         var updatedFetch = lastFetch
         let result: CommandResult
-        if before.status.unmergedCount > 0 {
+        if before.status.dirtyCountIsLowerBound {
+            result = CommandResult(stdout: "", stderr: Self.incompleteStatusMessage + " Nothing was pulled or pushed.", exitCode: -1)
+        } else if before.status.unmergedCount > 0 {
             result = CommandResult(stdout: "", stderr: "Resolve unmerged files before syncing. Nothing was pushed.", exitCode: -1)
         } else if !before.status.canSync {
             let reason = before.status.isDetached ? "Cannot sync a detached HEAD."
@@ -90,6 +94,8 @@ public struct RepoService: Sendable {
                 let workingTree = await runner.run(args: Self.statusArguments, timeout: 15)
                 if !workingTree.succeeded {
                     result = workingTree
+                } else if workingTree.truncated {
+                    result = CommandResult(stdout: "", stderr: "Status output was truncated after pull. Cannot check for unmerged files. Nothing was pushed.", exitCode: -1)
                 } else if GitParser.status(workingTree.stdout).unmergedCount > 0 {
                     result = CommandResult(stdout: "", stderr: "Pull left unmerged files. Resolve them before syncing. Nothing was pushed.", exitCode: -1)
                 } else {

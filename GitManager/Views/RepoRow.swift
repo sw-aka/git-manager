@@ -25,11 +25,13 @@ struct RepoRow: View {
                         .foregroundStyle(repo.status.upstream == nil || repo.status.upstreamGone ? .secondary : .primary)
                         .help(repo.status.upstream ?? "No upstream configured")
                 }
-                if repo.status.dirtyCount > 0 {
+                if repo.status.dirtyCount > 0 || repo.status.dirtyCountIsLowerBound {
                     HStack(spacing: 3) {
                         Circle().fill(.orange).frame(width: 6, height: 6)
-                        Text("\(repo.status.dirtyCount)")
-                    }.help("\(repo.status.dirtyCount) changed files")
+                        Text(repo.status.dirtyCountText)
+                    }.help(repo.status.dirtyCountIsLowerBound
+                           ? "At least \(repo.status.dirtyCount) changed files; status output was truncated"
+                           : "\(repo.status.dirtyCount) changed files")
                 }
             }.font(.caption)
             if let commit = repo.commits.first {
@@ -39,7 +41,8 @@ struct RepoRow: View {
             HStack(spacing: 10) {
                 Button("Sync", systemImage: "arrow.triangle.2.circlepath") { Task { await model.sync(repo.id) } }
                     .disabled(isBusy || !repo.status.canSync)
-                    .help(repo.status.canSync ? "Fast-forward pull, then push" : "Sync requires a branch and an upstream or origin")
+                    .help(repo.status.dirtyCountIsLowerBound ? "Sync is disabled because status output was truncated"
+                          : repo.status.canSync ? "Fast-forward pull, then push" : "Sync requires a branch and an upstream or origin")
                 Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
                 Spacer(minLength: 0)
                 Button { Task { await model.refresh(repo.id) } } label: { Image(systemName: "arrow.clockwise") }

@@ -52,6 +52,21 @@ final class GitParserTests: XCTestCase {
         let output = "2 R. N... 100644 100644 100644 abc abc R100 new\told\n? other\n"
         XCTAssertEqual(GitParser.status(output).dirtyCount, 2)
     }
+    func testTruncatedStatusCountsOnlyCompleteNULRecords() {
+        let output = "# branch.head main\0# branch.upstream origin/main\0# branch.ab +1 -2\0"
+            + "2 R. N... 100644 100644 100644 abc abc R100 new name\0? old name\0"
+            + "? complete\nfile\0? unfinished" + ProcessExecutor.truncationMarker
+        let status = GitParser.status(output, truncated: true)
+        XCTAssertEqual(status.dirtyCount, 2)
+        XCTAssertEqual(status.dirtyCountText, "2+")
+        XCTAssertFalse(status.canSync)
+        XCTAssertEqual(status.ahead, 1)
+        XCTAssertEqual(status.behind, 2)
+        let empty = GitParser.status("", truncated: true)
+        XCTAssertEqual(empty.dirtyCountText, "0+")
+        XCTAssertFalse(empty.canSync)
+        XCTAssertEqual(GitParser.status("? complete\0").dirtyCountText, "1")
+    }
     func testLogPreservesTabsPipesUnicodeAndEmptySubject() {
         let output = "abc\0fix\tpart | café 🦊\0Author | 名\02026-10-07T10:00:00+01:00\0\u{1e}\n"
             + "def\0\0Other\02026-10-06T09:00:00Z\0\u{1e}\n"

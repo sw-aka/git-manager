@@ -1,10 +1,14 @@
 import Foundation
 
 enum GitParser {
-    static func status(_ output: String) -> RepoStatus {
+    static func status(_ output: String, truncated: Bool = false) -> RepoStatus {
         var status = RepoStatus()
+        status.dirtyCountIsLowerBound = truncated
         let nulDelimited = output.contains("\0")
-        let records = output.split(separator: nulDelimited ? "\0" : "\n", omittingEmptySubsequences: false)
+        var records = output.split(separator: nulDelimited ? "\0" : "\n", omittingEmptySubsequences: false)
+        // Status uses -z. The final fragment can include a cut entry and the
+        // capture marker; count only records with their original terminator.
+        if truncated && !records.isEmpty { records.removeLast() }
         var skipRenamePath = false
         var hasAheadBehind = false
         for record in records {

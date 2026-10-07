@@ -11,6 +11,7 @@ public struct CommandResult: Equatable, Sendable {
     public let stderr: String
     public let exitCode: Int32
     public var timedOut = false
+    public var truncated = false
     public var succeeded: Bool { exitCode == 0 && !timedOut }
     public var failureMessage: String {
         let detail = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -99,6 +100,8 @@ private final class CapturedStream: @unchecked Sendable {
             return String(decoding: marked, as: UTF8.self)
         }
     }
+
+    var wasTruncated: Bool { stateLock.withLock { truncated } }
 }
 
 private final class ProcessCapture: Sendable {
@@ -122,6 +125,7 @@ private final class ProcessCapture: Sendable {
     }
 
     func strings() -> (String, String) { (outputStream.string(), errorStream.string()) }
+    var wasTruncated: Bool { outputStream.wasTruncated || errorStream.wasTruncated }
 }
 
 struct ProcessExecutor: Sendable {
@@ -247,7 +251,7 @@ struct ProcessExecutor: Sendable {
         let (stdout, stderr) = capture.strings()
         let signal = status & 0x7f
         let exitCode = signal == 0 ? (status >> 8) & 0xff : signal
-        return CommandResult(stdout: stdout, stderr: stderr, exitCode: exitCode, timedOut: timedOut)
+        return CommandResult(stdout: stdout, stderr: stderr, exitCode: exitCode, timedOut: timedOut, truncated: capture.wasTruncated)
     }
 
     private static func spawnFailure(_ code: Int32) -> CommandResult {
