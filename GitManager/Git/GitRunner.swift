@@ -4,16 +4,29 @@ protocol GitRunner: Sendable {
     func run(args: [String], timeout: TimeInterval) async -> CommandResult
 }
 
+private enum NoninteractiveGitEnvironment {
+    static let assignments = [
+        "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes",
+        "GIT_ASKPASS=/usr/bin/false", "SSH_ASKPASS=/usr/bin/false", "SSH_ASKPASS_REQUIRE=never"
+    ]
+
+    static func applying(to inherited: [String: String]) -> [String: String] {
+        var environment = inherited
+        for assignment in assignments {
+            let parts = assignment.split(separator: "=", maxSplits: 1)
+            environment[String(parts[0])] = String(parts[1])
+        }
+        return environment
+    }
+}
+
 struct LocalGitRunner: GitRunner {
     let path: String
     let executor: ProcessExecutor
 
     init(path: String, executor: ProcessExecutor = ProcessExecutor()) {
         self.path = path
-        var environment = executor.environment
-        environment["GIT_TERMINAL_PROMPT"] = "0"
-        environment["GIT_SSH_COMMAND"] = "ssh -o BatchMode=yes"
-        self.executor = ProcessExecutor(environment: environment)
+        self.executor = ProcessExecutor(environment: NoninteractiveGitEnvironment.applying(to: executor.environment))
     }
     func command(args: [String]) -> CommandInvocation {
         CommandInvocation(executable: "/usr/bin/git", arguments: ["-C", path] + args)
@@ -25,7 +38,12 @@ struct LocalGitRunner: GitRunner {
 
 struct SSHGitRunner: GitRunner {
     let source: RemoteRepoSource
-    var executor = ProcessExecutor()
+    let executor: ProcessExecutor
+
+    init(source: RemoteRepoSource, executor: ProcessExecutor = ProcessExecutor()) {
+        self.source = source.normalized
+        self.executor = ProcessExecutor(environment: NoninteractiveGitEnvironment.applying(to: executor.environment))
+    }
 
     static func quote(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
@@ -44,7 +62,7 @@ struct SSHGitRunner: GitRunner {
         ]
         if let port = source.port { arguments += ["-p", String(port)] }
         let remoteCommand = "cd " + Self.directoryArgument(source.path)
-            + " && " + (["env", "GIT_TERMINAL_PROMPT=0", "GIT_SSH_COMMAND=ssh -o BatchMode=yes", "git"]
+            + " && " + (["env"] + NoninteractiveGitEnvironment.assignments + ["git"]
                 + args).map(Self.quote).joined(separator: " ")
         arguments += ["--", source.host, remoteCommand]
         return CommandInvocation(executable: "/usr/bin/ssh", arguments: arguments)
