@@ -6,6 +6,7 @@ struct MainWindow: View {
     @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
     @State private var addingRemote = false
+    @State private var pendingRemoval: RemovalConfirmation?
 
     private var localSources: [RepoSource] {
         model.sources.filter { if case .local = $0 { true } else { false } }
@@ -39,7 +40,9 @@ struct MainWindow: View {
                                  : model.needsAttentionOnly ? "No repositories need attention" : "No repositories found")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
-                        ForEach(records) { repo in RepoRow(repo: repo, model: model).tag(repo.id) }
+                        ForEach(records) { repo in
+                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval).tag(repo.id)
+                        }
                     } header: {
                         HStack {
                             Text(source.title)
@@ -52,7 +55,7 @@ struct MainWindow: View {
                         }
                             .help(localPath(source))
                             .contextMenu {
-                                Button("Remove Source", role: .destructive) { model.removeSource(source.id) }
+                                Button("Remove Source...", role: .destructive) { requestRemoval([source.id], false) }
                             }
                     }
                 }
@@ -60,15 +63,22 @@ struct MainWindow: View {
                     Section(host) {
                         ForEach(model.visibleRepos.filter {
                             if case .remote(let remote) = $0.location.source { remote.host == host } else { false }
-                        }) { repo in RepoRow(repo: repo, model: model).tag(repo.id) }
+                        }) { repo in
+                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval).tag(repo.id)
+                        }
                     }
                 }
             }
             .listStyle(.sidebar)
+            .onDeleteCommand {
+                requestRemoval(model.selectedRemovalPlan.sourceIDs, model.selection.count > 1)
+            }
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 420)
         } detail: {
             if let repo = model.selectedRepo {
-                RepoDetail(repo: repo, model: model)
+                RepoDetail(repo: repo, model: model, requestRemoval: requestRemoval)
+            } else if model.selectedRepos.count > 1 {
+                selectionSummary
             } else {
                 ContentUnavailableView {
                     Label("Git Manager", systemImage: "arrow.triangle.branch")
@@ -97,11 +107,47 @@ struct MainWindow: View {
             #endif
         }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
+        .alert("Remove from Git Manager?", isPresented: Binding(
+            get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
+        ), presenting: pendingRemoval) { confirmation in
+            Button("Remove", role: .destructive) { model.removeSources(confirmation.plan.sourceIDs) }
+            Button("Cancel", role: .cancel) {}.keyboardShortcut(.defaultAction)
+        } message: { confirmation in
+            Text(confirmation.message)
+        }
         .alert("Git Manager", isPresented: Binding(
             get: { model.message != nil }, set: { if !$0 { model.message = nil } }
         )) {
             Button("OK") { model.message = nil }
         } message: { Text(model.message ?? "") }
+    }
+
+    private var selectionSummary: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("\(model.selectedRepos.count) repositories selected").font(.headline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 6) {
+                    ForEach(model.selectedRepos) { repo in
+                        Text(repo.location.name).lineLimit(1).help(repo.location.displayPath)
+                    }
+                }.frame(maxWidth: .infinity, alignment: .leading)
+            }
+            .frame(maxHeight: 200)
+            Button("Remove \(model.selectedRemovalPlan.entries.count) Sources...", role: .destructive) {
+                requestRemoval(model.selectedRemovalPlan.sourceIDs, true)
+            }
+            .disabled(model.selectedRemovalPlan.entries.isEmpty)
+            Spacer()
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .navigationTitle("Selection")
+    }
+
+    private func requestRemoval(_ sourceIDs: Set<UUID>, _ isBulk: Bool) {
+        let plan = SourceRemovalPlan(sourceIDs: sourceIDs, sources: model.sources, repos: model.repos)
+        guard !plan.entries.isEmpty else { return }
+        pendingRemoval = RemovalConfirmation(plan: plan, isBulk: isBulk || plan.entries.count > 1)
     }
 
     private func localPath(_ source: RepoSource) -> String {

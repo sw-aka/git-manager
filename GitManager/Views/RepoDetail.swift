@@ -4,6 +4,7 @@ import SwiftUI
 struct RepoDetail: View {
     let repo: RepoRecord
     let model: AppModel
+    let requestRemoval: (Set<UUID>, Bool) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
 
     var body: some View {
@@ -31,7 +32,7 @@ struct RepoDetail: View {
                     Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
                     Spacer()
-                    RemoveSourceAction(repo: repo, model: model)
+                    RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval)
                 }
                 if repo.locations.count > 1 {
                     Text("Provided by: " + repo.locations.map { $0.source.title }.joined(separator: ", "))
