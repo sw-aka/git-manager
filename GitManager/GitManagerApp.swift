@@ -3,6 +3,7 @@ import SwiftUI
 
 @main
 struct GitManagerApp: App {
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var delegate
     @State private var model = AppModel()
 
     var body: some Scene {

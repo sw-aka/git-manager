@@ -54,7 +54,7 @@ struct RepoRow: View {
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
             Button("Refresh") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
             Divider()
-            Button("Remove Source", role: .destructive) { model.removeSource(repo.location.source.id) }
+            RemoveSourceAction(repo: repo, model: model)
         }
     }
 }

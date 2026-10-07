@@ -3,6 +3,7 @@ import SwiftUI
 import AppKit
 
 struct MainWindow: View {
+    @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
     @State private var addingRemote = false
 
@@ -33,7 +34,9 @@ struct MainWindow: View {
                     Section {
                         let records = model.visibleRepos.filter { $0.location.source.id == source.id }
                         if records.isEmpty {
-                            Text(model.needsAttentionOnly ? "No repositories need attention" : "No repositories found")
+                            let shared = model.visibleRepos.contains { $0.sourceIDs.contains(source.id) }
+                            Text(shared ? "Repositories listed under another source"
+                                 : model.needsAttentionOnly ? "No repositories need attention" : "No repositories found")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         ForEach(records) { repo in RepoRow(repo: repo, model: model).tag(repo.id) }
@@ -79,6 +82,11 @@ struct MainWindow: View {
                     Label(model.isRefreshing ? "Refreshing…" : "Refresh All", systemImage: "arrow.clockwise")
                 }.disabled(model.isRefreshing)
             }
+        }
+        .onAppear {
+            #if DEBUG
+            AppWindows.startLifecycleTest(using: openWindow)
+            #endif
         }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
         .alert("Git Manager", isPresented: Binding(

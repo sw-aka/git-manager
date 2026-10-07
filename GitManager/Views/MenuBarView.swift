@@ -21,8 +21,7 @@ struct MenuBarView: View {
         Button(model.isRefreshing ? "Refreshing…" : "Refresh All") { Task { await model.refreshAll() } }
             .disabled(model.isRefreshing)
         Button("Open Window") {
-            openWindow(id: "main")
-            NSApp.activate(ignoringOtherApps: true)
+            AppWindows.openMain(using: openWindow)
         }
         SettingsLink { Text("Settings…") }
         Divider()

@@ -1,4 +1,4 @@
-.PHONY: gen build test smoke run clean
+.PHONY: gen build test smoke window-smoke run clean
 
 SWIFT_SANDBOX_FLAGS :=
 ifneq ($(origin NONO_CAP_FILE),undefined)
@@ -33,6 +33,12 @@ smoke:
 	wait "$$smoke_pid" 2>/dev/null || true; \
 	trap - EXIT; \
 	echo 'SMOKE PASSED: app stayed alive for 5 seconds'
+
+# Requires the Debug app produced by make test; exercises native window lifetime.
+window-smoke:
+	@test -x build/DerivedData/Build/Products/Debug/GitManager.app/Contents/MacOS/GitManager
+	GIT_MANAGER_DATA_DIR="$(CURDIR)/build/WindowLifecycleData" GIT_MANAGER_WINDOW_LIFECYCLE_TEST=1 build/DerivedData/Build/Products/Debug/GitManager.app/Contents/MacOS/GitManager > build/window-lifecycle.log 2>&1
+	@/usr/bin/grep '^WINDOW LIFECYCLE PASSED:' build/window-lifecycle.log
 
 run:
 	open build/GitManager.app

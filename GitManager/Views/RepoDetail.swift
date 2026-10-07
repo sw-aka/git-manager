@@ -29,10 +29,14 @@ struct RepoDetail: View {
                     Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
                     Spacer()
-                    Button("Remove Source", role: .destructive) { model.removeSource(repo.location.source.id) }
+                    RemoveSourceAction(repo: repo, model: model)
+                }
+                if repo.locations.count > 1 {
+                    Text("Provided by: " + repo.locations.map { $0.source.title }.joined(separator: ", "))
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 if case .local(let folder) = repo.location.source {
-                    Text("Source folder: \(folder.path). Removing this source removes all repositories discovered under it.")
+                    Text("Source folder: \(folder.path). Removing this source keeps repositories provided by another source.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }.padding([.horizontal, .top], 24)
