@@ -12,6 +12,7 @@ public struct SyncOutcome: Sendable {
 
 public struct RepoService: Sendable {
     let runner: any GitRunner
+    private static let statusArguments = ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"]
 
     init(runner: any GitRunner) { self.runner = runner }
     public init(location: RepoLocation) {
@@ -24,7 +25,7 @@ public struct RepoService: Sendable {
     }
 
     public func snapshot(lastFetch: Date? = nil, operationError: String? = nil) async -> RepoSnapshot {
-        let result = await runner.run(args: ["status", "--porcelain=v2", "--branch", "--untracked-files=all", "-z"], timeout: 15)
+        let result = await runner.run(args: Self.statusArguments, timeout: 15)
         guard result.succeeded else {
             var status = RepoStatus()
             status.lastFetch = lastFetch
@@ -70,7 +71,9 @@ public struct RepoService: Sendable {
         let before = await snapshot(lastFetch: lastFetch)
         var updatedFetch = lastFetch
         let result: CommandResult
-        if !before.status.canSync {
+        if before.status.unmergedCount > 0 {
+            result = CommandResult(stdout: "", stderr: "Resolve unmerged files before syncing. Nothing was pushed.", exitCode: -1)
+        } else if !before.status.canSync {
             let reason = before.status.isDetached ? "Cannot sync a detached HEAD."
                 : before.status.isUnborn ? "Create a commit before syncing this branch."
                 : "Sync needs an upstream or a remote named origin."
@@ -80,11 +83,18 @@ public struct RepoService: Sendable {
                 args: ["push", "--set-upstream", "origin", before.status.branch], timeout: 60
             )
         } else {
-            // Explicit --no-rebase overrides user configuration; --ff-only forbids merge commits.
-            let pull = await runner.run(args: ["pull", "--ff-only", "--no-rebase"], timeout: 60)
+            // Override user rebase/autostash settings and preserve dirty files on failure.
+            let pull = await runner.run(args: ["pull", "--ff-only", "--no-rebase", "--no-autostash"], timeout: 60)
             if pull.succeeded {
                 updatedFetch = Date()
-                result = await runner.run(args: ["push"], timeout: 60)
+                let workingTree = await runner.run(args: Self.statusArguments, timeout: 15)
+                if !workingTree.succeeded {
+                    result = workingTree
+                } else if GitParser.status(workingTree.stdout).unmergedCount > 0 {
+                    result = CommandResult(stdout: "", stderr: "Pull left unmerged files. Resolve them before syncing. Nothing was pushed.", exitCode: -1)
+                } else {
+                    result = await runner.run(args: ["push"], timeout: 60)
+                }
             }
             else { result = pull }
         }

@@ -8,6 +8,7 @@ public struct RepoStatus: Equatable, Sendable {
     public var ahead = 0
     public var behind = 0
     public var dirtyCount = 0
+    public var unmergedCount = 0
     public var isDetached = false
     public var isUnborn = false
     public var lastFetch: Date?

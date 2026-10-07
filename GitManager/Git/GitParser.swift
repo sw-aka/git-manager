@@ -24,7 +24,10 @@ enum GitParser {
                     if count.first == "+" { status.ahead = Int(count.dropFirst()) ?? 0 }
                     if count.first == "-" { status.behind = Int(count.dropFirst()) ?? 0 }
                 }
-            } else if record.hasPrefix("1 ") || record.hasPrefix("u ") || record.hasPrefix("? ") {
+            } else if record.hasPrefix("u ") {
+                status.dirtyCount += 1
+                status.unmergedCount += 1
+            } else if record.hasPrefix("1 ") || record.hasPrefix("? ") {
                 status.dirtyCount += 1
             } else if record.hasPrefix("2 ") {
                 status.dirtyCount += 1

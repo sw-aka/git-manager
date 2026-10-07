@@ -44,7 +44,9 @@ final class GitParserTests: XCTestCase {
             + "2 R. N... 100644 100644 100644 abc abc R100 new name\0? old name\0"
             + "? new\nfile\0u UU N... 100644 100644 100644 100644 abc abc abc conflict\0"
             + "! ignored\0"
-        XCTAssertEqual(GitParser.status(output).dirtyCount, 4)
+        let status = GitParser.status(output)
+        XCTAssertEqual(status.dirtyCount, 4)
+        XCTAssertEqual(status.unmergedCount, 1)
     }
     func testNewlineRenameCountsOnce() {
         let output = "2 R. N... 100644 100644 100644 abc abc R100 new\told\n? other\n"

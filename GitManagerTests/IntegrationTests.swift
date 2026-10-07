@@ -1,6 +1,16 @@
 import XCTest
 @testable import GitManagerCore
 
+private actor TrackingGitRunner: GitRunner {
+    let runner: LocalGitRunner
+    private(set) var pushCount = 0
+    init(_ runner: LocalGitRunner) { self.runner = runner }
+    func run(args: [String], timeout: TimeInterval) async -> CommandResult {
+        if args.first == "push" { pushCount += 1 }
+        return await runner.run(args: args, timeout: timeout)
+    }
+}
+
 @MainActor
 final class IntegrationTests: XCTestCase {
     private var root: URL!
@@ -198,6 +208,33 @@ final class IntegrationTests: XCTestCase {
         XCTAssertTrue(outcome.snapshot.status.error?.contains("push deliberately rejected") == true)
         XCTAssertEqual(outcome.snapshot.status.ahead, 1)
         XCTAssertEqual(outcome.snapshot.status.behind, 0)
+    }
+
+    func testAutostashConfigurationCannotChangeDirtyFileOrPushAfterConflict() async throws {
+        let dirtyContents = "my uncommitted edits\n"
+        try Data(dirtyContents.utf8).write(to: URL(fileURLWithPath: a).appendingPathComponent("base.txt"))
+        try await commit(b, file: "base.txt", text: "upstream edits\n", subject: "conflicting upstream change")
+        try await git(b, ["push"])
+        let localHead = try await git(a, ["rev-parse", "HEAD"])
+        let remoteHead = try await git(root.path, ["--git-dir", remote, "rev-parse", "main"])
+        let runner = TrackingGitRunner(LocalGitRunner(path: a, executor: executor))
+        for (pullAutostash, rebaseAutostash) in [("true", "false"), ("false", "true"), ("true", "true")] {
+            try await git(a, ["config", "pull.autostash", pullAutostash])
+            try await git(a, ["config", "rebase.autoStash", rebaseAutostash])
+            let outcome = await RepoService(runner: runner).sync()
+            XCTAssertFalse(outcome.result.succeeded)
+            XCTAssertNotNil(outcome.snapshot.status.error)
+            XCTAssertEqual(outcome.snapshot.status.unmergedCount, 0)
+            XCTAssertEqual(try String(contentsOfFile: a + "/base.txt", encoding: .utf8), dirtyContents)
+            let after = try await git(a, ["rev-parse", "HEAD"])
+            let remoteAfter = try await git(root.path, ["--git-dir", remote, "rev-parse", "main"])
+            XCTAssertEqual(after, localHead)
+            XCTAssertEqual(remoteAfter, remoteHead)
+            let stashes = try await git(a, ["stash", "list"])
+            XCTAssertEqual(stashes, "")
+        }
+        let pushCount = await runner.pushCount
+        XCTAssertEqual(pushCount, 0)
     }
 
     func testScannerDepthHiddenNodeModulesAndGitFile() async throws {
