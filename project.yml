@@ -36,13 +36,16 @@ targets:
     platform: macOS
     sources:
       - path: GitManager
-        excludes: [Models, Git, Services, AppModel.swift]
+        excludes: [Models, Git, Services, AppModel.swift, Assets.xcassets]
+      - path: GitManager/Assets.xcassets
+        buildPhase: resources
     dependencies:
       - target: GitManagerCore
         embed: true
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.alldeploy.gitmanager
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         INFOPLIST_KEY_CFBundleDisplayName: Git Manager
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.developer-tools
   GitManagerTests:

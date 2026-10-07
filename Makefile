@@ -1,4 +1,4 @@
-.PHONY: gen build test smoke window-smoke run clean
+.PHONY: icons gen build test smoke window-smoke run clean
 
 SWIFT_SANDBOX_FLAGS :=
 ifneq ($(origin NONO_CAP_FILE),undefined)
@@ -7,6 +7,16 @@ endif
 
 gen:
 	/opt/homebrew/bin/xcodegen generate
+
+icons:
+	@set -eu; \
+	for size in 16 32 128 256 512; do \
+		for scale in 1 2; do \
+			px=$$((size * scale)); \
+			/opt/homebrew/bin/rsvg-convert -w "$$px" -h "$$px" Design/AppIcon.svg -o "GitManager/Assets.xcassets/AppIcon.appiconset/icon_$${size}x$${size}@$${scale}x.png"; \
+		done; \
+	done
+	cp Design/MenuBarIcon.svg GitManager/Assets.xcassets/MenuBarIcon.imageset/MenuBarIcon.svg
 
 build:
 	xcodebuild -project GitManager.xcodeproj -scheme GitManager -configuration Release -derivedDataPath build/DerivedData $(SWIFT_SANDBOX_FLAGS) build
