@@ -53,6 +53,13 @@ struct SSHGitRunner: GitRunner {
         if path.hasPrefix("~/") { return "~/" + quote(String(path.dropFirst(2))) }
         return quote(path)
     }
+    static func destination(_ host: String) -> String {
+        let parts = host.split(separator: "@", maxSplits: 1, omittingEmptySubsequences: false)
+        let hostname = String(parts.last!)
+        guard hostname.hasPrefix("["), hostname.hasSuffix("]"), hostname.contains(":") else { return host }
+        let username = parts.count == 2 ? String(parts[0]) + "@" : ""
+        return username + String(hostname.dropFirst().dropLast())
+    }
     func command(args: [String]) -> CommandInvocation {
         // -- ends SSH options BEFORE the host; putting it after the host runs it remotely.
         var arguments = [
@@ -64,7 +71,7 @@ struct SSHGitRunner: GitRunner {
         let remoteCommand = "cd " + Self.directoryArgument(source.path)
             + " && " + (["env"] + NoninteractiveGitEnvironment.assignments + ["git"]
                 + args).map(Self.quote).joined(separator: " ")
-        arguments += ["--", source.host, remoteCommand]
+        arguments += ["--", Self.destination(source.host), remoteCommand]
         return CommandInvocation(executable: "/usr/bin/ssh", arguments: arguments)
     }
     func run(args: [String], timeout: TimeInterval = 15) async -> CommandResult {

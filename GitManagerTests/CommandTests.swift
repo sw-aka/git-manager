@@ -137,12 +137,14 @@ final class CommandTests: XCTestCase {
     }
 
     func testSSHHostSpellingIsPreservedInCommandsURIsAndIdentity() throws {
-        for host in ["MIXED-ALIAS", "CaseSensitiveUser@MiXeD-Host", "user@[FE80::1]"] {
+        for (host, destination) in [("MIXED-ALIAS", "MIXED-ALIAS"),
+                                    ("CaseSensitiveUser@MiXeD-Host", "CaseSensitiveUser@MiXeD-Host"),
+                                    ("user@[FE80::1]", "user@FE80::1")] {
             let remote = RemoteRepoSource(host: host, path: "/srv/./repo/")
             XCTAssertEqual(remote.host, host)
             XCTAssertEqual(remote.normalized.host, host)
             let command = SSHGitRunner(source: remote).command(args: ["fetch"])
-            XCTAssertEqual(command.arguments[command.arguments.count - 2], host)
+            XCTAssertEqual(command.arguments[command.arguments.count - 2], destination)
             let location = RepoLocation(source: .remote(remote), path: remote.path)
             guard case .remote(let source) = location.source else { return XCTFail("Not a remote source") }
             XCTAssertEqual(source.host, host)
@@ -150,6 +152,23 @@ final class CommandTests: XCTestCase {
             XCTAssertEqual(uri, "ssh://" + host + "/srv/repo")
             let changedSpelling = RemoteRepoSource(host: host.lowercased(), path: "/srv/repo")
             XCTAssertNotEqual(location.id, RepoLocation(source: .remote(changedSpelling), path: changedSpelling.path).id)
+        }
+    }
+
+    func testIPv6SSHUsesBareLiteralsAndZedKeepsURLBrackets() throws {
+        for (host, destination, uriHost) in [("user@[::1]", "user@::1", "user@[::1]"),
+                                            ("[::1]", "::1", "[::1]"),
+                                            ("user@::1", "user@::1", "user@[::1]"),
+                                            ("::1", "::1", "[::1]")] {
+            let remote = RemoteRepoSource(host: host, port: 2222, path: "/repo")
+            try remote.validate()
+            let command = SSHGitRunner(source: remote).command(args: ["status"])
+            XCTAssertEqual(Array(command.arguments.dropLast().suffix(4)), ["-p", "2222", "--", destination])
+            let location = RepoLocation(source: .remote(remote), path: remote.path)
+            let zed = try ZedLauncher.command(for: location, cliExists: true, appExists: true)
+            XCTAssertEqual(zed.arguments, ["ssh://" + uriHost + ":2222/repo"])
+            guard case .remote(let source) = location.source else { return XCTFail("Not a remote source") }
+            XCTAssertEqual(source.host, host, "SSH argument formatting must not change stored host spelling")
         }
     }
 }
