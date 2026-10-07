@@ -28,7 +28,10 @@ public final class AppModel {
         self.serviceFactory = serviceFactory
         do {
             let loaded = try store.loadRecovering()
-            sources = loaded.state.sources
+            sources = loaded.state.sources.map { source in
+                if case .remote(let remote) = source { return .remote(remote.normalized) }
+                return source
+            }
             settings = loaded.state.settings
             message = loaded.notice
             settings.fetchIntervalMinutes = settings.validatedInterval
@@ -79,10 +82,12 @@ public final class AppModel {
 
     public func addRemote(_ remote: RemoteRepoSource) throws {
         try remote.validate()
+        let remote = remote.normalized
+        let identity = RepoLocation(source: .remote(remote), path: remote.path).id
         guard !sources.contains(where: {
-            if case .remote(let source) = $0 { source.host == remote.host && source.port == remote.port && source.path == remote.path }
+            if case .remote(let source) = $0 { RepoLocation(source: $0, path: source.path).id == identity }
             else { false }
-        }) else { return }
+        }) else { throw ValidationError.message("This remote repository is already added.") }
         sources.append(.remote(remote))
         persist()
         Task { await refreshAll() }

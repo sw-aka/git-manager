@@ -80,4 +80,34 @@ final class CommandTests: XCTestCase {
         XCTAssertEqual(try ZedLauncher.remoteURI(RemoteRepoSource(host: "work", path: "/repo")), "ssh://work/repo")
         XCTAssertEqual(try ZedLauncher.remoteURI(RemoteRepoSource(host: "sam@[::1]", port: 22, path: "/repo")), "ssh://sam@[::1]:22/repo")
     }
+
+    func testRemotePathNormalization() {
+        for (path, expected) in [
+            ("/srv/repo/", "/srv/repo"), ("//srv///./repo", "/srv/repo"),
+            ("/srv/other/../repo", "/srv/repo"), ("/.././", "/"),
+            ("~/", "~"), ("~//group/../repo/./", "~/repo"), ("~/..", "~/.."),
+            ("~/../other/./repo/", "~/../other/repo"), ("/srv/repo's space/../名", "/srv/名")
+        ] {
+            XCTAssertEqual(RemoteRepoSource.normalizedPath(path), expected, path)
+            XCTAssertEqual(RemoteRepoSource.normalizedPath(expected), expected, "Normalization must be idempotent")
+        }
+        XCTAssertEqual(RemoteRepoSource.normalizedHost("CaseSensitiveUser@EXAMPLE.COM"), "CaseSensitiveUser@example.com")
+        XCTAssertEqual(RemoteRepoSource.normalizedHost("WORK-HOST"), "work-host")
+    }
+
+    func testRemoteIdentityNormalizesPersistedAndMutatedSources() {
+        let canonical = RemoteRepoSource(host: "User@host", path: "/srv/repo")
+        let expected = RepoLocation(source: .remote(canonical), path: canonical.path).id
+        for spelling in ["/srv/repo/", "/srv/./repo", "/srv//group/../repo/"] {
+            var raw = canonical
+            raw.host = "User@HOST"
+            raw.path = spelling
+            XCTAssertEqual(RepoLocation(source: .remote(raw), path: spelling).id, expected)
+        }
+        let differentUser = RemoteRepoSource(host: "user@host", path: "/srv/repo")
+        XCTAssertNotEqual(RepoLocation(source: .remote(differentUser), path: differentUser.path).id, expected)
+        let explicitPort = RemoteRepoSource(host: canonical.host, port: 22, path: canonical.path)
+        XCTAssertNotEqual(RepoLocation(source: .remote(explicitPort), path: explicitPort.path).id, expected,
+                          "An omitted port must continue to respect SSH config")
+    }
 }

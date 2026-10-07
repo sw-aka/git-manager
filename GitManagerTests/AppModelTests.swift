@@ -131,7 +131,10 @@ final class AppModelTests: XCTestCase {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let first = RepoSource.remote(RemoteRepoSource(host: "user@host", port: 2222, path: "~/repo"))
-        let second = RepoSource.remote(RemoteRepoSource(host: "user@host", port: 2222, path: "~/repo"))
+        var raw = RemoteRepoSource(host: "user@host", port: 2222, path: "~/repo")
+        raw.host = "user@HOST"
+        raw.path = "~//group/.././repo/"
+        let second = RepoSource.remote(raw)
         let otherPort = RepoSource.remote(RemoteRepoSource(host: "user@host", port: 2223, path: "~/repo"))
         let store = Store(directory: root)
         try store.save(StoredState(sources: [first, second, otherPort]))
@@ -141,8 +144,47 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repos.count, 2)
         let shared = try XCTUnwrap(model.repos.first { $0.sourceIDs.contains(first.id) })
         XCTAssertEqual(shared.sourceIDs, [first.id, second.id])
+        let aliasID = RepoLocation(source: second, path: raw.path).id
+        XCTAssertEqual(shared.id, aliasID)
+        await runner.hold()
+        let firstRefresh = Task { await model.refresh(shared.id) }
+        for _ in 0..<100 where await runner.fetchCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        let secondRefresh = Task { await model.refresh(aliasID) }
+        try await Task.sleep(for: .milliseconds(20))
+        let fetches = await runner.fetchCount
+        XCTAssertEqual(fetches, 1)
+        await runner.release()
+        await firstRefresh.value
+        await secondRefresh.value
         model.removeSource(first.id)
         XCTAssertEqual(model.repos.count, 2)
         XCTAssertEqual(model.repos.first { $0.id == shared.id }?.sourceIDs, [second.id])
     }
+
+    func testAddRemoteRefusesEquivalentIdentityAndPersistsNormalizedSource() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        var oldSource = RemoteRepoSource(host: "User@host", path: "/srv/repo")
+        oldSource.host = "User@HOST"
+        oldSource.path = "/srv/./repo/"
+        let store = Store(directory: root)
+        try store.save(StoredState(sources: [.remote(oldSource)]))
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        for path in ["/srv/repo/", "/srv/./repo", "/srv//other/../repo/"] {
+            XCTAssertThrowsError(try model.addRemote(RemoteRepoSource(host: "User@host", path: path))) { error in
+                XCTAssertTrue(error.localizedDescription.contains("already added"))
+            }
+        }
+        XCTAssertEqual(model.sources.count, 1)
+        try model.addRemote(RemoteRepoSource(host: "User@OTHER-HOST", port: 2222, path: "~//other/../repo/"))
+        let stored = try store.load()
+        guard case .remote(let added) = stored.sources.last else { return XCTFail("Remote source was not saved") }
+        XCTAssertEqual(added.host, "User@other-host")
+        XCTAssertEqual(added.path, "~/repo")
+        XCTAssertEqual(added.port, 2222)
+        await model.refreshAll(fetch: false)
+        XCTAssertEqual(model.repos.count, 2)
+    }
+
 }

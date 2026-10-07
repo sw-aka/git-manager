@@ -19,9 +19,33 @@ public struct RemoteRepoSource: Codable, Hashable, Sendable, Identifiable {
 
     public init(id: UUID = UUID(), host: String, port: Int? = nil, path: String) {
         self.id = id
-        self.host = host
+        self.host = Self.normalizedHost(host)
         self.port = port
-        self.path = path
+        self.path = Self.normalizedPath(path)
+    }
+
+    public var normalized: Self {
+        Self(id: id, host: host, port: port, path: path)
+    }
+
+    public static func normalizedHost(_ host: String) -> String {
+        guard let separator = host.lastIndex(of: "@") else { return host.lowercased() }
+        return String(host[...separator]) + host[host.index(after: separator)...].lowercased()
+    }
+
+    public static func normalizedPath(_ path: String) -> String {
+        let homeRelative = path == "~" || path.hasPrefix("~/")
+        guard homeRelative || path.hasPrefix("/") else { return path }
+        let suffix = homeRelative ? String(path.dropFirst()) : path
+        var segments: [Substring] = []
+        for segment in suffix.split(separator: "/") where segment != "." {
+            if segment == ".." {
+                if let last = segments.last, last != ".." { segments.removeLast() }
+                else if homeRelative { segments.append(segment) }
+            } else { segments.append(segment) }
+        }
+        let rest = segments.joined(separator: "/")
+        return homeRelative ? (rest.isEmpty ? "~" : "~/" + rest) : "/" + rest
     }
 
     public func validate() throws {
@@ -71,9 +95,14 @@ public struct RepoLocation: Hashable, Sendable {
     public let path: String
 
     public init(source: RepoSource, path: String) {
-        self.source = source
-        if case .local = source { self.path = Self.canonicalLocalPath(path) }
-        else { self.path = path }
+        switch source {
+        case .local:
+            self.source = source
+            self.path = Self.canonicalLocalPath(path)
+        case .remote(let remote):
+            self.source = .remote(remote.normalized)
+            self.path = RemoteRepoSource.normalizedPath(path)
+        }
     }
 
     public static func canonicalLocalPath(_ path: String) -> String {
