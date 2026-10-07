@@ -19,50 +19,114 @@ public struct CommandResult: Equatable, Sendable {
     }
 }
 
-// Each drain owns a separate pipe; the lock protects the completed byte buffers.
-private final class ProcessCapture: @unchecked Sendable {
-    let stdout = Pipe()
-    let stderr = Pipe()
-    private let lock = NSLock()
-    private var output = Data()
-    private var error = Data()
-    private var processFinished = false
+// The descriptor lock serializes every read/poll/close. The state lock lets the
+// executor request a stop even when the drain is polling or continuously reading.
+private final class CapturedStream: @unchecked Sendable {
+    let pipe = Pipe()
+    private let descriptorLock = NSLock()
+    private let stateLock = NSLock()
+    private var closed = false
+    private var stopRequested = false
+    private var finishDeadline: DispatchTime?
+    private var data = Data()
+    private var truncated = false
 
-    func drainOutput() {
-        let data = drain(stdout.fileHandleForReading.fileDescriptor)
-        lock.withLock { output = data }
-    }
-    func drainError() {
-        let data = drain(stderr.fileHandleForReading.fileDescriptor)
-        lock.withLock { error = data }
-    }
-    func finish() { lock.withLock { processFinished = true } }
+    private enum ReadStep { case bytes(Int), idle, retry, end }
 
-    private func drain(_ descriptor: Int32) -> Data {
-        let flags = fcntl(descriptor, F_GETFL)
-        guard flags >= 0, fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0 else { return Data() }
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 16384)
-        while true {
-            let count = Darwin.read(descriptor, &buffer, buffer.count)
-            if count > 0 { data.append(buffer, count: count); continue }
-            if count == 0 { return data }
-            if errno == EINTR { continue }
-            guard errno == EAGAIN || errno == EWOULDBLOCK else { return data }
-            // A descendant may inherit the pipe. Once the command exits, drain all
-            // available bytes and stop instead of waiting forever for that child's EOF.
-            if lock.withLock({ processFinished }) { return data }
-            var pending = pollfd(fd: descriptor, events: Int16(POLLIN | POLLHUP), revents: 0)
-            _ = poll(&pending, 1, 100)
+    func finish(at deadline: DispatchTime) { stateLock.withLock { finishDeadline = deadline } }
+
+    func close() {
+        stateLock.withLock { stopRequested = true }
+        descriptorLock.withLock {
+            guard !closed else { return }
+            closed = true
+            try? pipe.fileHandleForReading.close()
         }
     }
 
-    func strings() -> (String, String) {
-        lock.withLock { (String(decoding: output, as: UTF8.self), String(decoding: error, as: UTF8.self)) }
+    func drain() {
+        defer { close() }
+        let prepared = descriptorLock.withLock {
+            guard !closed else { return false }
+            let descriptor = pipe.fileHandleForReading.fileDescriptor
+            let flags = fcntl(descriptor, F_GETFL)
+            return flags >= 0 && fcntl(descriptor, F_SETFL, flags | O_NONBLOCK) >= 0
+        }
+        guard prepared else { return }
+        var buffer = [UInt8](repeating: 0, count: 16384)
+        while !stateLock.withLock({ stopRequested || finishDeadline.map { DispatchTime.now() >= $0 } == true }) {
+            switch read(into: &buffer) {
+            case .bytes(let count):
+                stateLock.withLock {
+                    guard !stopRequested else { return }
+                    let kept = min(count, ProcessExecutor.maximumCapturedBytes - data.count)
+                    if kept > 0 { data.append(buffer, count: kept) }
+                    if kept < count { truncated = true }
+                }
+                // Keep reading/discarding excess bytes so the child cannot block
+                // on a full pipe. Check the total grace deadline on EVERY read.
+            case .idle:
+                if stateLock.withLock({ finishDeadline != nil || stopRequested }) { return }
+                descriptorLock.withLock {
+                    guard !closed else { return }
+                    var pending = pollfd(fd: pipe.fileHandleForReading.fileDescriptor,
+                                         events: Int16(POLLIN | POLLHUP), revents: 0)
+                    _ = poll(&pending, 1, 50)
+                }
+            case .retry: continue
+            case .end: return
+            }
+        }
+    }
+
+    private func read(into buffer: inout [UInt8]) -> ReadStep {
+        descriptorLock.withLock {
+            guard !closed else { return .end }
+            let count = Darwin.read(pipe.fileHandleForReading.fileDescriptor, &buffer, buffer.count)
+            if count > 0 { return .bytes(count) }
+            if count == 0 { return .end }
+            if errno == EINTR { return .retry }
+            return errno == EAGAIN || errno == EWOULDBLOCK ? .idle : .end
+        }
+    }
+
+    func string() -> String {
+        stateLock.withLock {
+            if !truncated { return String(decoding: data, as: UTF8.self) }
+            let marker = Data(ProcessExecutor.truncationMarker.utf8)
+            var marked = Data(data.prefix(ProcessExecutor.maximumCapturedBytes - marker.count))
+            marked.append(marker)
+            return String(decoding: marked, as: UTF8.self)
+        }
     }
 }
 
+private final class ProcessCapture: Sendable {
+    private let outputStream = CapturedStream()
+    private let errorStream = CapturedStream()
+    var stdout: Pipe { outputStream.pipe }
+    var stderr: Pipe { errorStream.pipe }
+
+    func drainOutput() { outputStream.drain() }
+    func drainError() { errorStream.drain() }
+
+    func finishAndWait(for drains: DispatchGroup) {
+        let deadline = DispatchTime.now() + .milliseconds(500)
+        outputStream.finish(at: deadline)
+        errorStream.finish(at: deadline)
+        _ = drains.wait(timeout: deadline + .milliseconds(100))
+        // Also handles drain blocks not yet scheduled by Dispatch. Closing shares
+        // the descriptor lock with reads and bounded polls; no stale FD can be used.
+        outputStream.close()
+        errorStream.close()
+    }
+
+    func strings() -> (String, String) { (outputStream.string(), errorStream.string()) }
+}
+
 struct ProcessExecutor: Sendable {
+    static let maximumCapturedBytes = 4 * 1024 * 1024
+    static let truncationMarker = "\n[output truncated]\n"
     let environment: [String: String]
     private static let executionQueue = DispatchQueue(label: "com.alldeploy.gitmanager.processes", qos: .utility, attributes: .concurrent)
     private static let limiter = WorkLimiter(limit: 6)
@@ -161,9 +225,9 @@ struct ProcessExecutor: Sendable {
             let waited = waitpid(pid, &status, WNOHANG)
             if waited == pid { break }
             if waited == -1 && errno != EINTR {
-                capture.finish()
-                drains.wait()
-                return spawnFailure(errno)
+                let failure = errno
+                capture.finishAndWait(for: drains)
+                return spawnFailure(failure)
             }
             if DispatchTime.now() >= deadline {
                 timedOut = true
@@ -179,8 +243,7 @@ struct ProcessExecutor: Sendable {
             }
             _ = poll(nil, 0, 10)
         }
-        capture.finish()
-        drains.wait()
+        capture.finishAndWait(for: drains)
         let (stdout, stderr) = capture.strings()
         let signal = status & 0x7f
         let exitCode = signal == 0 ? (status >> 8) & 0xff : signal

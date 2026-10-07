@@ -4,6 +4,77 @@ import Darwin
 
 @MainActor
 final class ProcessExecutorTests: XCTestCase {
+    nonisolated private static func killRecordedGroup(at file: URL) {
+        guard let value = try? String(contentsOf: file, encoding: .utf8),
+              let groupID = Int32(value.trimmingCharacters(in: .whitespacesAndNewlines)), groupID > 0 else { return }
+        kill(-groupID, SIGKILL)
+    }
+
+    func testContinuousBackgroundWritersCannotExtendDrainGrace() async throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-writers-\(UUID())")
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let groupFile = root.appendingPathComponent("group")
+        // The watchdog also cleans up if a future regression makes run hang.
+        let watchdog = Task.detached {
+            do { try await Task.sleep(for: .seconds(3)) } catch { return }
+            Self.killRecordedGroup(at: groupFile)
+        }
+        defer {
+            watchdog.cancel()
+            Self.killRecordedGroup(at: groupFile)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let script = "printf '%s\\n' \"$$\" > " + SSHGitRunner.quote(groupFile.path)
+            + "; /usr/bin/yes stdout-writer & /usr/bin/yes stderr-writer >&2 & sleep 0.2; exit 0"
+        var environment = ProcessExecutor.userEnvironment
+        environment["SSH_AUTH_SOCK"] = "/unused/gitmanager-test-agent"
+        let start = Date()
+        let result = await ProcessExecutor(environment: environment).run(
+            CommandInvocation(executable: "/bin/sh", arguments: ["-c", script]), timeout: 2
+        )
+        XCTAssertEqual(result.exitCode, 0)
+        XCTAssertFalse(result.timedOut)
+        XCTAssertLessThan(Date().timeIntervalSince(start), 2)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: groupFile.path))
+        XCTAssertLessThanOrEqual(result.stdout.utf8.count, ProcessExecutor.maximumCapturedBytes)
+        XCTAssertLessThanOrEqual(result.stderr.utf8.count, ProcessExecutor.maximumCapturedBytes)
+        XCTAssertTrue(result.stdout.hasPrefix("stdout-writer"))
+        XCTAssertTrue(result.stderr.hasPrefix("stderr-writer"))
+        XCTAssertTrue(result.stdout.hasSuffix(ProcessExecutor.truncationMarker))
+        XCTAssertTrue(result.stderr.hasSuffix(ProcessExecutor.truncationMarker))
+    }
+
+    func testHugeOutputPreservesHeadAndTruncatesBothStreamsWithoutBlocking() async {
+        let script = "printf 'stdout-head\\n'; /usr/bin/yes o 2>/dev/null | /usr/bin/head -c 50000000; "
+            + "printf 'stdout-tail'; printf 'stderr-head\\n' >&2; "
+            + "/usr/bin/yes e 2>/dev/null | /usr/bin/head -c 50000000 >&2; printf 'stderr-tail' >&2"
+        let result = await ProcessExecutor().run(CommandInvocation(executable: "/bin/sh", arguments: ["-c", script]), timeout: 15)
+        XCTAssertTrue(result.succeeded, result.failureMessage)
+        XCTAssertEqual(result.stdout.utf8.count, ProcessExecutor.maximumCapturedBytes)
+        XCTAssertEqual(result.stderr.utf8.count, ProcessExecutor.maximumCapturedBytes)
+        XCTAssertTrue(result.stdout.hasPrefix("stdout-head\n"))
+        XCTAssertTrue(result.stderr.hasPrefix("stderr-head\n"))
+        XCTAssertTrue(result.stdout.hasSuffix(ProcessExecutor.truncationMarker))
+        XCTAssertTrue(result.stderr.hasSuffix(ProcessExecutor.truncationMarker))
+        XCTAssertFalse(result.stdout.contains("stdout-tail"))
+        XCTAssertFalse(result.stderr.contains("stderr-tail"))
+    }
+
+    func testRepeatedCommandsDoNotLeakPipeDescriptors() async {
+        let command = CommandInvocation(executable: "/bin/sh", arguments: ["-c", "printf output; printf error >&2"])
+        let executor = ProcessExecutor()
+        _ = await executor.run(command, timeout: 2)
+        let before = (0..<512).filter { fcntl(Int32($0), F_GETFD) != -1 }.count
+        for _ in 0..<40 {
+            let result = await executor.run(command, timeout: 2)
+            XCTAssertTrue(result.succeeded, result.failureMessage)
+            XCTAssertEqual(result.stdout, "output")
+            XCTAssertEqual(result.stderr, "error")
+        }
+        let after = (0..<512).filter { fcntl(Int32($0), F_GETFD) != -1 }.count
+        XCTAssertEqual(after, before, "Pipe descriptors leaked across completed commands")
+    }
+
     func testDrainsBothPipesBeyondBufferCapacity() async {
         let script = "BEGIN { for(i=0; i<8000; i++) { print \"stdout abcdefghijklmnopqrstuvwxyz\"; print \"stderr abcdefghijklmnopqrstuvwxyz\" > \"/dev/stderr\" } }"
         let result = await ProcessExecutor().run(CommandInvocation(executable: "/usr/bin/awk", arguments: [script]), timeout: 15)
