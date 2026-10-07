@@ -107,13 +107,13 @@ struct MainWindow: View {
             #endif
         }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
-        .alert("Remove from Git Manager?", isPresented: Binding(
+        .sheet(isPresented: Binding(
             get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
-        ), presenting: pendingRemoval) { confirmation in
-            Button("Remove", role: .destructive) { model.removeSources(confirmation.plan.sourceIDs) }
-            Button("Cancel", role: .cancel) {}.keyboardShortcut(.defaultAction)
-        } message: { confirmation in
-            Text(confirmation.message)
+        )) {
+            if let confirmation = pendingRemoval {
+                RemovalConfirmationSheet(confirmation: confirmation, cancel: { pendingRemoval = nil },
+                                         remove: { confirmRemoval(confirmation) })
+            }
         }
         .alert("Git Manager", isPresented: Binding(
             get: { model.message != nil }, set: { if !$0 { model.message = nil } }
@@ -148,6 +148,23 @@ struct MainWindow: View {
         let plan = SourceRemovalPlan(sourceIDs: sourceIDs, sources: model.sources, repos: model.repos)
         guard !plan.entries.isEmpty else { return }
         pendingRemoval = RemovalConfirmation(plan: plan, isBulk: isBulk || plan.entries.count > 1)
+    }
+
+    private func confirmRemoval(_ confirmation: RemovalConfirmation) {
+        // Validation and removal are synchronous on the main actor, so a rescan
+        // cannot change membership between this check and the state update.
+        switch confirmation.plan.confirmationDecision(sources: model.sources, repos: model.repos) {
+        case .proceed(let current):
+            pendingRemoval = nil
+            model.removeSources(current.sourceIDs)
+        case .reconfirm(let current):
+            var updated = confirmation
+            updated.plan = current
+            updated.requiresReconfirmation = true
+            pendingRemoval = updated
+        case .noOp:
+            pendingRemoval = nil
+        }
     }
 
     private func localPath(_ source: RepoSource) -> String {
