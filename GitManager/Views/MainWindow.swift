@@ -7,6 +7,7 @@ struct MainWindow: View {
     @Bindable var model: AppModel
     @State private var addingRemote = false
     @State private var pendingRemoval: RemovalConfirmation?
+    @State private var editingRemote: RemoteRepoSource?
 
     private var localSources: [RepoSource] {
         model.sources.filter { if case .local = $0 { true } else { false } }
@@ -41,7 +42,7 @@ struct MainWindow: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         ForEach(records) { repo in
-                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval).tag(repo.id)
+                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource).tag(repo.id)
                         }
                     } header: {
                         HStack {
@@ -55,6 +56,7 @@ struct MainWindow: View {
                         }
                             .help(localPath(source))
                             .contextMenu {
+                                Button("Change Folder...") { editSource(source.id) }
                                 Button("Remove Source...", role: .destructive) { requestRemoval([source.id], false) }
                             }
                     }
@@ -64,7 +66,7 @@ struct MainWindow: View {
                         ForEach(model.visibleRepos.filter {
                             if case .remote(let remote) = $0.location.source { remote.host == host } else { false }
                         }) { repo in
-                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval).tag(repo.id)
+                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource).tag(repo.id)
                         }
                     }
                 }
@@ -76,7 +78,7 @@ struct MainWindow: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 420)
         } detail: {
             if let repo = model.selectedRepo {
-                RepoDetail(repo: repo, model: model, requestRemoval: requestRemoval).id(repo.id)
+                RepoDetail(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource).id(repo.id)
             } else if model.selectedRepos.count > 1 {
                 selectionSummary
             } else {
@@ -107,6 +109,7 @@ struct MainWindow: View {
             #endif
         }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
+        .sheet(item: $editingRemote) { AddRemoteSheet(model: model, editing: $0) }
         .sheet(isPresented: Binding(
             get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
         )) {
@@ -169,6 +172,26 @@ struct MainWindow: View {
 
     private func localPath(_ source: RepoSource) -> String {
         if case .local(let folder) = source { folder.path } else { "" }
+    }
+    private func editSource(_ sourceID: UUID) {
+        switch model.sources.first(where: { $0.id == sourceID }) {
+        case .remote(let remote): editingRemote = remote
+        case .local(let folder): changeFolder(folder)
+        case nil: break
+        }
+    }
+    private func changeFolder(_ folder: LocalFolderSource) {
+        let panel = NSOpenPanel()
+        panel.title = "Change Folder"
+        panel.message = "Choose a new folder to replace \(folder.path)."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = URL(fileURLWithPath: folder.path)
+        panel.prompt = "Choose"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        do { try model.updateLocal(folder.id, to: url) }
+        catch { model.message = error.localizedDescription }
     }
     private func addLocal() {
         let panel = NSOpenPanel()

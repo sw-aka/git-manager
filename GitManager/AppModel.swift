@@ -92,12 +92,51 @@ public final class AppModel {
     public func addRemote(_ remote: RemoteRepoSource) throws {
         try remote.validate()
         let remote = remote.normalized
-        let identity = RepoLocation(source: .remote(remote), path: remote.path).id
-        guard !sources.contains(where: {
-            if case .remote(let source) = $0 { RepoLocation(source: $0, path: source.path).id == identity }
-            else { false }
-        }) else { throw ValidationError.message("This remote repository is already added.") }
+        guard !containsRemote(remote) else { throw ValidationError.message("This remote repository is already added.") }
         sources.append(.remote(remote))
+        persist()
+        Task { await refreshAll() }
+    }
+
+    /// Points an existing local folder source at a different folder, keeping its identity.
+    public func updateLocal(_ sourceID: UUID, to url: URL) throws {
+        guard let index = sources.firstIndex(where: { $0.id == sourceID }), case .local(var folder) = sources[index] else {
+            throw ValidationError.message("This source was removed.")
+        }
+        let path = RepoLocation.canonicalLocalPath(url.path)
+        guard !sources.contains(where: {
+            if case .local(let other) = $0 { other.id != sourceID && RepoLocation.canonicalLocalPath(other.path) == path } else { false }
+        }) else { throw ValidationError.message("This folder is already added.") }
+        folder.path = path
+        replaceSource(at: index, with: .local(folder))
+    }
+
+    /// Replaces the host, port and path of the remote source with the same ID.
+    public func updateRemote(_ remote: RemoteRepoSource) throws {
+        try remote.validate()
+        let remote = remote.normalized
+        guard let index = sources.firstIndex(where: { $0.id == remote.id }), case .remote = sources[index] else {
+            throw ValidationError.message("This source was removed.")
+        }
+        guard !containsRemote(remote) else { throw ValidationError.message("This remote repository is already added.") }
+        let wasSelected = selectedRepos.contains { $0.sourceIDs.contains(remote.id) }
+        replaceSource(at: index, with: .remote(remote))
+        if wasSelected { selection.insert(RepoLocation(source: .remote(remote), path: remote.path).id) }
+    }
+
+    private func containsRemote(_ remote: RemoteRepoSource) -> Bool {
+        let identity = RepoLocation(source: .remote(remote), path: remote.path).id
+        return sources.contains {
+            if case .remote(let source) = $0 { source.id != remote.id && RepoLocation(source: $0, path: source.path).id == identity }
+            else { false }
+        }
+    }
+
+    private func replaceSource(at index: Int, with source: RepoSource) {
+        guard sources[index] != source else { return }
+        sources[index] = source
+        sourceScanErrors[source.id] = nil
+        dropLocations(of: [source.id])
         persist()
         Task { await refreshAll() }
     }
@@ -110,12 +149,17 @@ public final class AppModel {
         guard sources.contains(where: { ids.contains($0.id) }) else { return }
         sources.removeAll { ids.contains($0.id) }
         sourceScanErrors = sourceScanErrors.filter { !ids.contains($0.key) }
+        dropLocations(of: ids)
+        persist()
+    }
+
+    /// Detaches repositories from the given sources; repositories still provided by another source stay.
+    private func dropLocations(of ids: Set<UUID>) {
         repos = repos.compactMap { repo in
             let remaining = repo.locations.filter { !ids.contains($0.source.id) }
             return remaining.isEmpty ? nil : repo.withLocations(remaining)
         }
         selection.formIntersection(repos.map(\.id))
-        persist()
     }
 
     private func persist() {
@@ -148,7 +192,9 @@ public final class AppModel {
             return (records: records, errors: errors)
         }.value
         let existing = Dictionary(uniqueKeysWithValues: repos.map { ($0.id, $0) })
-        let currentSourceIDs = Set(self.sources.map(\.id))
+        // Compare whole sources, not IDs: an edited source keeps its ID but its old results are stale.
+        let current = Set(self.sources)
+        let currentSourceIDs = Set(sources.filter { current.contains($0) }.map(\.id))
         sourceScanErrors = discovered.errors.filter { currentSourceIDs.contains($0.key) && !$0.value.isEmpty }
         var consolidated: [RepoRecord] = []
         var indices: [String: Int] = [:]

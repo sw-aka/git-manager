@@ -296,6 +296,78 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(model.repos.count, 2)
     }
 
+    func testUpdateRemoteKeepsIdentityRefusesDuplicatesAndMovesSelection() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let edited = RemoteRepoSource(host: "host", path: "/srv/typo'")
+        let other = RemoteRepoSource(host: "host", path: "/srv/other")
+        let store = Store(directory: root)
+        try store.save(StoredState(sources: [.remote(edited), .remote(other)]))
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await model.refreshAll(fetch: false)
+        let oldID = RepoLocation(source: .remote(edited), path: edited.path).id
+        model.selection = [oldID]
+
+        XCTAssertThrowsError(try model.updateRemote(RemoteRepoSource(id: edited.id, host: "host", path: "/srv/./other/"))) { error in
+            XCTAssertTrue(error.localizedDescription.contains("already added"))
+        }
+        XCTAssertThrowsError(try model.updateRemote(RemoteRepoSource(id: edited.id, host: "host", path: "relative")))
+        XCTAssertThrowsError(try model.updateRemote(RemoteRepoSource(host: "host", path: "/srv/new"))) { error in
+            XCTAssertTrue(error.localizedDescription.contains("removed"))
+        }
+        XCTAssertEqual(model.sources, [.remote(edited), .remote(other)])
+        try model.updateRemote(edited)
+
+        try model.updateRemote(RemoteRepoSource(id: edited.id, host: "user@host", port: 2222, path: "/srv/space dir//./repo/"))
+        let expected = RemoteRepoSource(id: edited.id, host: "user@host", port: 2222, path: "/srv/space dir/repo")
+        XCTAssertEqual(model.sources, [.remote(expected), .remote(other)])
+        XCTAssertEqual(try store.load().sources, [.remote(expected), .remote(other)])
+        let newID = RepoLocation(source: .remote(expected), path: expected.path).id
+        XCTAssertFalse(model.repos.contains { $0.id == oldID }, "Records for the old location must be dropped at once")
+        XCTAssertEqual(model.selection, [newID])
+        while model.isRefreshing { try await Task.sleep(for: .milliseconds(10)) }
+        await model.refreshAll(fetch: false)
+        XCTAssertEqual(Set(model.repos.map(\.id)), [newID, RepoLocation(source: .remote(other), path: other.path).id])
+        XCTAssertEqual(model.selectedRepo?.location.displayPath, "user@host:2222:/srv/space dir/repo")
+    }
+
+    func testUpdateLocalRescansNewFolderAndRefusesExistingFolder() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let oldFolder = root.appendingPathComponent("old")
+        let newFolder = root.appendingPathComponent("new")
+        let otherFolder = root.appendingPathComponent("other")
+        for url in [oldFolder, newFolder, otherFolder] {
+            try FileManager.default.createDirectory(at: url.appendingPathComponent("repo/.git"), withIntermediateDirectories: true)
+        }
+        let source = LocalFolderSource(path: oldFolder.path)
+        let other = LocalFolderSource(path: otherFolder.path)
+        let store = Store(directory: root.appendingPathComponent("state"))
+        try store.save(StoredState(sources: [.local(source), .local(other)]))
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await model.refreshAll(fetch: false)
+        XCTAssertEqual(model.repos.count, 2)
+
+        XCTAssertThrowsError(try model.updateLocal(source.id, to: otherFolder)) { error in
+            XCTAssertTrue(error.localizedDescription.contains("already added"))
+        }
+        XCTAssertThrowsError(try model.updateLocal(UUID(), to: newFolder))
+        try model.updateLocal(source.id, to: newFolder)
+
+        let newPath = RepoLocation.canonicalLocalPath(newFolder.path)
+        let expected = RepoSource.local(LocalFolderSource(id: source.id, path: newPath))
+        XCTAssertEqual(model.sources, [expected, .local(other)])
+        XCTAssertEqual(try store.load().sources, [expected, .local(other)])
+        XCTAssertFalse(model.repos.contains { $0.sourceIDs.contains(source.id) })
+        while model.isRefreshing { try await Task.sleep(for: .milliseconds(10)) }
+        await model.refreshAll(fetch: false)
+        let edited = try XCTUnwrap(model.repos.first { $0.sourceIDs.contains(source.id) })
+        XCTAssertEqual(edited.location.path, RepoLocation.canonicalLocalPath(newFolder.appendingPathComponent("repo").path))
+        XCTAssertEqual(model.repos.count, 2)
+    }
+
     func testCaseDistinctSSHAliasesRemainSeparateAfterAddingAndLoading() async throws {
         let root = try temporaryDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

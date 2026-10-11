@@ -3,15 +3,25 @@ import SwiftUI
 
 struct AddRemoteSheet: View {
     let model: AppModel
+    /// The source being edited; nil adds a new remote repository.
+    let editing: RemoteRepoSource?
     @Environment(\.dismiss) private var dismiss
-    @State private var host = ""
-    @State private var port = ""
-    @State private var path = ""
+    @State private var host: String
+    @State private var port: String
+    @State private var path: String
     @State private var error: String?
+
+    init(model: AppModel, editing: RemoteRepoSource? = nil) {
+        self.model = model
+        self.editing = editing
+        _host = State(initialValue: editing?.host ?? "")
+        _port = State(initialValue: editing?.port.map(String.init) ?? "")
+        _path = State(initialValue: editing?.path ?? "")
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
-            Text("Add Remote Repo").font(.title2.bold())
+            Text(editing == nil ? "Add Remote Repo" : "Edit Remote Repo").font(.title2.bold())
             Form {
                 TextField("SSH host", text: $host, prompt: Text("alias or user@host"))
                 TextField("Port (optional)", text: $port, prompt: Text("22"))
@@ -23,21 +33,24 @@ struct AddRemoteSheet: View {
             HStack {
                 Spacer()
                 Button("Cancel") { dismiss() }.keyboardShortcut(.cancelAction)
-                Button("Add", action: add).keyboardShortcut(.defaultAction)
+                Button(editing == nil ? "Add" : "Save", action: save).keyboardShortcut(.defaultAction)
                     .disabled(host.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || path.isEmpty)
             }
         }.padding(24).frame(width: 480)
     }
 
-    private func add() {
+    private func save() {
         let trimmedPort = port.trimmingCharacters(in: .whitespacesAndNewlines)
         if !trimmedPort.isEmpty && Int(trimmedPort) == nil {
             error = "Port must be a number between 1 and 65535."
             return
         }
-        let source = RemoteRepoSource(host: host.trimmingCharacters(in: .whitespacesAndNewlines),
+        let source = RemoteRepoSource(id: editing?.id ?? UUID(), host: host.trimmingCharacters(in: .whitespacesAndNewlines),
                                       port: Int(trimmedPort), path: path)
-        do { try model.addRemote(source); dismiss() }
+        do {
+            if editing == nil { try model.addRemote(source) } else { try model.updateRemote(source) }
+            dismiss()
+        }
         catch { self.error = error.localizedDescription }
     }
 }

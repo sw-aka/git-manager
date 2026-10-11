@@ -5,6 +5,7 @@ struct RepoDetail: View {
     let repo: RepoRecord
     let model: AppModel
     let requestRemoval: (Set<UUID>, Bool) -> Void
+    let editSource: (UUID) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
     private var isSyncing: Bool { model.syncing.contains(repo.id) }
 
@@ -36,6 +37,7 @@ struct RepoDetail: View {
                     Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
                     Spacer()
+                    EditSourceAction(repo: repo, model: model, editSource: editSource)
                     RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval)
                 }
                 if repo.locations.count > 1 {

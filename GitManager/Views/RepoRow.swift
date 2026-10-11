@@ -5,6 +5,7 @@ struct RepoRow: View {
     let repo: RepoRecord
     let model: AppModel
     let requestRemoval: (Set<UUID>, Bool) -> Void
+    let editSource: (UUID) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
 
     private var accessibilitySummary: String {
@@ -75,6 +76,7 @@ struct RepoRow: View {
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
             Button("Refresh") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
             Divider()
+            EditSourceAction(repo: repo, model: model, editSource: editSource)
             RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval, allowsBulkRemoval: true)
         }
     }
