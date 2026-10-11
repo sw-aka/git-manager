@@ -22,16 +22,19 @@ struct RepoRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Text(repo.location.name)
-                .font(.body.weight(.semibold))
-                .lineLimit(1)
-                .truncationMode(.tail)
-                .layoutPriority(1)
-            Text(repo.status.branch)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(repo.location.name)
+                    .font(.body.weight(.semibold))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .layoutPriority(1)
+                Text(repo.status.branch)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+            }
+            .layoutPriority(1)
             Spacer(minLength: 0)
             HStack(spacing: 6) {
                 if isBusy { ProgressView().controlSize(.mini) }
