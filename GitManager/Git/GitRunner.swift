@@ -61,6 +61,10 @@ struct SSHGitRunner: GitRunner {
         return username + String(hostname.dropFirst().dropLast())
     }
     func command(args: [String]) -> CommandInvocation {
+        shellCommand((["env"] + NoninteractiveGitEnvironment.assignments + ["git"] + args).map(Self.quote))
+    }
+    /// Runs already quoted words in the source directory on the remote host.
+    func shellCommand(_ quotedWords: [String]) -> CommandInvocation {
         // -- ends SSH options BEFORE the host; putting it after the host runs it remotely.
         var arguments = [
             "-o", "BatchMode=yes", "-o", "ConnectTimeout=10",
@@ -68,9 +72,7 @@ struct SSHGitRunner: GitRunner {
             "-o", "ControlPersist=300"
         ]
         if let port = source.port { arguments += ["-p", String(port)] }
-        let remoteCommand = "cd " + Self.directoryArgument(source.path)
-            + " && " + (["env"] + NoninteractiveGitEnvironment.assignments + ["git"]
-                + args).map(Self.quote).joined(separator: " ")
+        let remoteCommand = "cd " + Self.directoryArgument(source.path) + " && " + quotedWords.joined(separator: " ")
         arguments += ["--", Self.destination(source.host), remoteCommand]
         return CommandInvocation(executable: "/usr/bin/ssh", arguments: arguments)
     }
