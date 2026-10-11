@@ -1,3 +1,4 @@
+import AppKit
 import GitManagerCore
 import SwiftUI
 
@@ -7,6 +8,8 @@ struct RepoRow: View {
     let requestRemoval: (Set<UUID>, Bool) -> Void
     let editSource: (UUID) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
+    private static let bodyXHeight = NSFont.preferredFont(forTextStyle: .body).xHeight
+    private static let captionXHeight = NSFont.preferredFont(forTextStyle: .caption1).xHeight
 
     private var accessibilitySummary: String {
         var parts = [repo.location.name, "Branch \(repo.status.branch)",
@@ -22,17 +25,19 @@ struct RepoRow: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            HStack(alignment: .firstTextBaseline, spacing: 6) {
+            HStack(alignment: .xHeightCenter, spacing: 6) {
                 Text(repo.location.name)
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(1)
+                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - Self.bodyXHeight / 2 }
                 Text(repo.status.branch)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
+                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - Self.captionXHeight / 2 }
             }
             .layoutPriority(1)
             Spacer(minLength: 0)
@@ -83,4 +88,13 @@ struct RepoRow: View {
             RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval, allowsBulkRemoval: true)
         }
     }
+}
+
+private extension VerticalAlignment {
+    /// Middle of the lowercase letters, so mixed-size text looks vertically centered.
+    enum XHeightCenter: AlignmentID {
+        static func defaultValue(in d: ViewDimensions) -> CGFloat { d[VerticalAlignment.center] }
+    }
+
+    static let xHeightCenter = VerticalAlignment(XHeightCenter.self)
 }
