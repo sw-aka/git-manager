@@ -76,7 +76,7 @@ struct MainWindow: View {
             .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 420)
         } detail: {
             if let repo = model.selectedRepo {
-                RepoDetail(repo: repo, model: model, requestRemoval: requestRemoval)
+                RepoDetail(repo: repo, model: model, requestRemoval: requestRemoval).id(repo.id)
             } else if model.selectedRepos.count > 1 {
                 selectionSummary
             } else {

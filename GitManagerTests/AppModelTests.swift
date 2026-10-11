@@ -2,23 +2,23 @@ import XCTest
 @testable import GitManagerCore
 
 private actor ControlledRunner: GitRunner {
-    private var holdFetch = false
+    private var holdOperations = false
     private var continuations: [CheckedContinuation<Void, Never>] = []
     private(set) var fetchCount = 0
     private(set) var pullCount = 0
 
-    func hold() { holdFetch = true }
+    func hold() { holdOperations = true }
     func release() {
-        holdFetch = false
+        holdOperations = false
         let pending = continuations
         continuations.removeAll()
         pending.forEach { $0.resume() }
     }
     func run(args: [String], timeout: TimeInterval) async -> CommandResult {
         if args.first == "pull" { pullCount += 1 }
-        if args.first == "fetch" {
-            fetchCount += 1
-            if holdFetch { await withCheckedContinuation { continuations.append($0) } }
+        if args.first == "fetch" { fetchCount += 1 }
+        if holdOperations && (args.first == "fetch" || args.first == "pull") {
+            await withCheckedContinuation { continuations.append($0) }
         }
         let output: String
         switch args.first {
@@ -146,6 +146,40 @@ final class AppModelTests: XCTestCase {
         model.removeSource(linked.id)
         XCTAssertTrue(model.repos.isEmpty)
         XCTAssertTrue(model.selection.isEmpty)
+    }
+
+    func testSyncingTracksInFlightSyncButNotRefresh() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let repo = root.appendingPathComponent("repo")
+        try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        let store = Store(directory: root.appendingPathComponent("state"))
+        try store.save(StoredState(sources: [.local(LocalFolderSource(path: repo.path))]))
+        let runner = ControlledRunner()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: runner) })
+        await model.refreshAll(fetch: false)
+        let record = try XCTUnwrap(model.repos.first)
+        XCTAssertTrue(model.syncing.isEmpty)
+
+        await runner.hold()
+        let sync = Task { await model.sync(record.id) }
+        for _ in 0..<100 where await runner.pullCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.busy, [record.id])
+        XCTAssertEqual(model.syncing, [record.id])
+        await runner.release()
+        await sync.value
+        XCTAssertTrue(model.busy.isEmpty)
+        XCTAssertTrue(model.syncing.isEmpty)
+
+        await runner.hold()
+        let refresh = Task { await model.refresh(record.id) }
+        for _ in 0..<100 where await runner.fetchCount == 0 { try await Task.sleep(for: .milliseconds(10)) }
+        XCTAssertEqual(model.busy, [record.id])
+        XCTAssertTrue(model.syncing.isEmpty)
+        await runner.release()
+        await refresh.value
+        XCTAssertTrue(model.busy.isEmpty)
+        XCTAssertTrue(model.syncing.isEmpty)
     }
 
     func testRemoteIdentityAndRemovalKeepOtherProvider() async throws {

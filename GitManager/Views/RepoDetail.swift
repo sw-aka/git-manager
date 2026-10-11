@@ -6,6 +6,7 @@ struct RepoDetail: View {
     let model: AppModel
     let requestRemoval: (Set<UUID>, Bool) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
+    private var isSyncing: Bool { model.syncing.contains(repo.id) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
@@ -27,8 +28,11 @@ struct RepoDetail: View {
                 Text(repo.status.lastFetch.map { "Last fetched \(RelativeTime.string($0))" } ?? "Not fetched yet")
                     .font(.caption).foregroundStyle(.secondary)
                 HStack {
-                    Button("Sync", systemImage: "arrow.triangle.2.circlepath") { Task { await model.sync(repo.id) } }
-                        .disabled(isBusy || !repo.status.canSync)
+                    Button { Task { await model.sync(repo.id) } } label: {
+                        Label { Text("Sync") } icon: {
+                            Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: isSyncing)
+                        }
+                    }.disabled(isBusy || !repo.status.canSync)
                     Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
                     Spacer()

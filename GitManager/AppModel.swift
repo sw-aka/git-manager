@@ -8,6 +8,7 @@ public final class AppModel {
     public private(set) var repos: [RepoRecord] = []
     public private(set) var sourceScanErrors: [UUID: [ScanIssue]] = [:]
     public private(set) var busy: Set<String> = []
+    public private(set) var syncing: Set<String> = []
     public private(set) var isRefreshing = false
     public var message: String?
     public var needsAttentionOnly = false
@@ -210,10 +211,12 @@ public final class AppModel {
     public func sync(_ id: String) async {
         guard !busy.contains(id), let repo = repos.first(where: { $0.id == id }), repo.status.canSync else { return }
         busy.insert(id)
+        syncing.insert(id)
         await limiter.acquire()
         let outcome = await serviceFactory(repo.location).sync(lastFetch: repo.status.lastFetch)
         apply(outcome.snapshot, to: id)
         await limiter.release()
+        syncing.remove(id)
         busy.remove(id)
     }
 
