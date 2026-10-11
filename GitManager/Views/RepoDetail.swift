@@ -58,8 +58,11 @@ struct RepoDetail: View {
                 .padding(.horizontal, 24)
             }
             Text("Recent commits").font(.headline).padding(.horizontal, 24)
-            if repo.commits.isEmpty {
+            if repo.commits.isEmpty && isBusy {
+                ProgressView("Loading commits...").frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else if repo.commits.isEmpty {
                 ContentUnavailableView("No commits", systemImage: "clock", description: Text("Recent commits appear here after status is loaded."))
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 List(repo.commits) { commit in
                     VStack(alignment: .leading, spacing: 6) {
@@ -82,6 +85,7 @@ struct RepoDetail: View {
                 }.listStyle(.plain)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .navigationTitle(repo.location.name)
     }
 }
