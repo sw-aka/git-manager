@@ -9,6 +9,7 @@ struct RepoRow: View {
     let requestRemoval: (Set<UUID>, Bool) -> Void
     let editSource: (UUID) -> Void
     let newGroup: (Set<String>) -> Void
+    @Binding var draggedGroupID: UUID?
     private var isBusy: Bool { model.busy.contains(repo.id) }
     private static let bodyXHeight = NSFont.preferredFont(forTextStyle: .body).xHeight
     private static let captionXHeight = NSFont.preferredFont(forTextStyle: .caption1).xHeight
@@ -82,10 +83,14 @@ struct RepoRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
         .help(repo.location.displayPath + "\nDrag to reorder or move to a group.")
-        .draggable(RepositoryDrag.value(for: repo.id)) {
-            RepositoryDragPreview(name: repo.location.name, branch: repo.status.branch, colorScheme: colorScheme)
+        .onDrag {
+            draggedGroupID = nil
+            return SidebarDragItemProvider.make(for: .repository(repo.id))
+        } preview: {
+            SidebarDragPreview(name: repo.location.name, detail: repo.status.branch, symbol: "arrow.triangle.branch", colorScheme: colorScheme)
         }
-        .repositoryDropTarget(model: model, groupID: model.organization.groupByRepository[repo.id], before: repo.id)
+        .repositoryDropTarget(model: model, groupID: model.organization.groupByRepository[repo.id],
+                              draggedGroupID: $draggedGroupID, before: repo.id)
         .contextMenu {
             Button("Sync") { Task { await model.sync(repo.id) } }.disabled(isBusy || !repo.status.canSync)
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
@@ -105,9 +110,10 @@ struct RepoRow: View {
     }
 }
 
-struct RepositoryDragPreview: View {
+struct SidebarDragPreview: View {
     let name: String
-    let branch: String
+    var detail: String? = nil
+    let symbol: String
     let colorScheme: ColorScheme
 
     // Drag previews render outside the sidebar's environment. Resolve both
@@ -117,9 +123,9 @@ struct RepositoryDragPreview: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            Image(systemName: "arrow.triangle.branch")
+            Image(systemName: symbol)
             Text(name).fontWeight(.semibold)
-            Text(branch).font(.caption).foregroundStyle(foreground.opacity(0.75))
+            if let detail { Text(detail).font(.caption).foregroundStyle(foreground.opacity(0.75)) }
         }
         .font(.body)
         .foregroundStyle(foreground)

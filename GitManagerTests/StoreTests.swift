@@ -80,4 +80,43 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(decoded.organization.repositoryOrder, ["a", "b"])
         XCTAssertEqual(decoded.organization.groupByRepository, ["a": group.id])
     }
+
+    func testFlatGroupStateMigratesWithoutLosingMembershipOrOrder() throws {
+        let group = RepoGroup(name: "Work")
+        let state = StoredState(organization: RepoOrganization(groups: [group], repositoryOrder: ["b", "a"],
+                                                               groupByRepository: ["a": group.id, "b": group.id]))
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(state)) as? [String: Any])
+        var organization = try XCTUnwrap(object["organization"] as? [String: Any])
+        organization["ungroupedExpanded"] = nil
+        organization["groups"] = [["id": group.id.uuidString, "name": group.name]]
+        object["organization"] = organization
+        let decoded = try JSONDecoder().decode(StoredState.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertEqual(decoded, state)
+        XCTAssertNil(decoded.organization.groups[0].parentID)
+        XCTAssertTrue(decoded.organization.groups[0].isExpanded)
+        XCTAssertTrue(decoded.organization.ungroupedExpanded)
+    }
+
+    func testInvalidGroupParentsAreRepairedWithoutLosingRepositories() throws {
+        let a = UUID(), b = UUID(), c = UUID(), orphan = UUID(), child = UUID(), selfParent = UUID()
+        let groups = [RepoGroup(id: child, name: "Child", parentID: orphan),
+                      RepoGroup(id: orphan, name: "Orphan", parentID: UUID()),
+                      RepoGroup(id: a, name: "A", parentID: b),
+                      RepoGroup(id: b, name: "B", parentID: c),
+                      RepoGroup(id: c, name: "C", parentID: a),
+                      RepoGroup(id: selfParent, name: "Self", parentID: selfParent)]
+        let source = RepoSource.local(LocalFolderSource(path: "/project"))
+        let state = StoredState(sources: [source], organization: RepoOrganization(groups: groups, repositoryOrder: ["repo"],
+                                                                                groupByRepository: ["repo": c], ungroupedExpanded: false))
+        let decoded = try JSONDecoder().decode(StoredState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(decoded.sources, [source])
+        XCTAssertEqual(Set(decoded.organization.outline().map(\.id)), Set(groups.map(\.id)))
+        XCTAssertEqual(decoded.organization.groups.first { $0.id == child }?.parentID, orphan, "Repair orphan roots without detaching valid children")
+        XCTAssertNil(decoded.organization.groups.first { $0.id == orphan }?.parentID)
+        XCTAssertNil(decoded.organization.groups.first { $0.id == selfParent }?.parentID)
+        XCTAssertEqual(decoded.organization.groupByRepository, ["repo": c])
+        XCTAssertEqual(decoded.organization.repositoryOrder, ["repo"])
+        XCTAssertFalse(decoded.organization.ungroupedExpanded)
+        XCTAssertEqual(decoded.organization.normalized, decoded.organization, "Normalization must be stable")
+    }
 }

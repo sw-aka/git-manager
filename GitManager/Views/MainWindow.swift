@@ -9,6 +9,7 @@ struct MainWindow: View {
     @State private var pendingRemoval: RemovalConfirmation?
     @State private var editingRemote: RemoteRepoSource?
     @State private var editingGroup: GroupEditorRequest?
+    @State private var draggedGroupID: UUID?
 
     private var localSources: [RepoSource] {
         model.sources.filter { if case .local = $0 { true } else { false } }
@@ -29,10 +30,33 @@ struct MainWindow: View {
                         .foregroundStyle(model.needsAttentionOnly ? Color.accentColor : Color.secondary)
                 }.buttonStyle(.plain)
 
-                ForEach(model.organization.groups) { group in
-                    repositorySection(groupID: group.id, title: group.name)
+                ForEach(sidebarItems) { item in
+                    switch item {
+                    case .group(let entry):
+                        GroupHeaderRow(model: model, group: entry.group, depth: entry.depth,
+                                       draggedGroupID: $draggedGroupID, newSubgroup: newSubgroup,
+                                       rename: { editingGroup = GroupEditorRequest(group: $0) })
+                            .selectionDisabled()
+                    case .ungrouped:
+                        GroupHeaderRow(model: model, group: nil, depth: 0,
+                                       draggedGroupID: $draggedGroupID, newSubgroup: newSubgroup,
+                                       rename: { editingGroup = GroupEditorRequest(group: $0) })
+                            .selectionDisabled()
+                    case .repository(let repo, let depth):
+                        RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource,
+                                newGroup: newGroup, draggedGroupID: $draggedGroupID)
+                            .padding(.leading, CGFloat(depth) * 16 + 24)
+                            .tag(repo.id)
+                    case .empty(let groupID, let depth):
+                        Text(model.needsAttentionOnly ? "No repositories need attention" : "Drag repositories here")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.leading, CGFloat(depth) * 16 + 24)
+                            .padding(.vertical, 4)
+                            .repositoryDropTarget(model: model, groupID: groupID, draggedGroupID: $draggedGroupID)
+                            .selectionDisabled()
+                    }
                 }
-                repositorySection(groupID: nil, title: model.organization.groups.isEmpty ? "Repositories" : "Ungrouped")
 
                 if !localSources.isEmpty {
                     Section("Source Folders") {
@@ -115,42 +139,29 @@ struct MainWindow: View {
         } message: { Text(model.message ?? "") }
     }
 
-    private func repositorySection(groupID: UUID?, title: String) -> some View {
-        Section {
-            let records = model.repositories(in: groupID)
-            if records.isEmpty {
-                Text(model.needsAttentionOnly ? "No repositories need attention" : "Drag repositories here")
-                    .font(.caption).foregroundStyle(.secondary)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.vertical, 4)
-                    .repositoryDropTarget(model: model, groupID: groupID)
-            }
-            ForEach(records) { repo in
-                RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource, newGroup: newGroup)
-                    .tag(repo.id)
-            }
-        } header: {
-            HStack {
-                Text(title)
-                Spacer()
-                Text("\(model.repositories(in: groupID, visibleOnly: false).count)")
-                    .padding(.trailing, 16)
-            }
-            .help("Drop a repository on this heading to move it to the end of the group.")
-            .repositoryDropTarget(model: model, groupID: groupID)
-            .contextMenu {
-                if let groupID, let group = model.organization.groups.first(where: { $0.id == groupID }) {
-                    Button("Rename Group…") { editingGroup = GroupEditorRequest(group: group) }
-                    Button("Move Group Up") { model.moveGroup(groupID, by: -1) }
-                        .disabled(model.organization.groups.first?.id == groupID)
-                    Button("Move Group Down") { model.moveGroup(groupID, by: 1) }
-                        .disabled(model.organization.groups.last?.id == groupID)
-                    Divider()
-                    Button("Dissolve Group (Keep Repositories)") { model.removeGroup(groupID) }
+    private var sidebarItems: [RepositorySidebarItem] {
+        var items: [RepositorySidebarItem] = []
+        for entry in model.organization.outline(visibleOnly: true) {
+            items.append(.group(entry))
+            if entry.group.isExpanded {
+                let records = model.repositories(in: entry.id)
+                items.append(contentsOf: records.map { .repository($0, depth: entry.depth + 1) })
+                if records.isEmpty && model.organization.children(of: entry.id).isEmpty {
+                    items.append(.empty(groupID: entry.id, depth: entry.depth + 1))
                 }
-                Button("New Group…") { newGroup([]) }
             }
         }
+        items.append(.ungrouped)
+        if model.organization.ungroupedExpanded {
+            let records = model.repositories(in: nil)
+            items.append(contentsOf: records.map { .repository($0, depth: 1) })
+            if records.isEmpty { items.append(.empty(groupID: nil, depth: 1)) }
+        }
+        return items
+    }
+
+    private func newSubgroup(_ parentID: UUID) {
+        editingGroup = GroupEditorRequest(parentID: parentID)
     }
 
     private func newGroup(_ repositoryIDs: Set<String>) {
@@ -234,5 +245,21 @@ struct MainWindow: View {
         panel.allowsMultipleSelection = true
         panel.prompt = "Add"
         if panel.runModal() == .OK { panel.urls.forEach(model.addLocal) }
+    }
+}
+
+private enum RepositorySidebarItem: Identifiable {
+    case group(RepoGroupOutlineEntry)
+    case ungrouped
+    case repository(RepoRecord, depth: Int)
+    case empty(groupID: UUID?, depth: Int)
+
+    var id: String {
+        switch self {
+        case .group(let entry): "group:\(entry.id)"
+        case .ungrouped: "ungrouped"
+        case .repository(let repo, _): "repo:\(repo.id)"
+        case .empty(let id, _): "empty:\(id?.uuidString ?? "ungrouped")"
+        }
     }
 }

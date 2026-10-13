@@ -50,7 +50,7 @@ public final class AppModel {
 
     public var orderedRepos: [RepoRecord] {
         let ordered = organization.ordered(repos)
-        return organization.groups.flatMap { group in ordered.filter { organization.groupByRepository[$0.id] == group.id } }
+        return organization.outline().flatMap { entry in ordered.filter { organization.groupByRepository[$0.id] == entry.id } }
             + ordered.filter { organization.groupByRepository[$0.id] == nil }
     }
     public var visibleRepos: [RepoRecord] { orderedRepos.filter { !needsAttentionOnly || $0.status.needsAttention } }
@@ -66,10 +66,32 @@ public final class AppModel {
         (visibleOnly ? visibleRepos : orderedRepos).filter { organization.groupByRepository[$0.id] == groupID }
     }
 
+    public func repositoryCount(in groupID: UUID?) -> Int {
+        guard let groupID else { return repositories(in: nil, visibleOnly: false).count }
+        let ids = organization.subtreeIDs(of: groupID)
+        return repos.filter { organization.groupByRepository[$0.id].map { ids.contains($0) } ?? false }.count
+    }
+
+    public func setGroupExpanded(_ id: UUID?, to expanded: Bool) {
+        if let id {
+            guard let index = organization.groups.firstIndex(where: { $0.id == id }),
+                  organization.groups[index].isExpanded != expanded else { return }
+            organization.groups[index].isExpanded = expanded
+        } else {
+            guard organization.ungroupedExpanded != expanded else { return }
+            organization.ungroupedExpanded = expanded
+        }
+        persist()
+    }
+
     @discardableResult
-    public func createGroup(named name: String) throws -> UUID {
-        let group = RepoGroup(name: try validatedGroupName(name))
+    public func createGroup(named name: String, parentID: UUID? = nil) throws -> UUID {
+        if let parentID, !organization.groups.contains(where: { $0.id == parentID }) {
+            throw ValidationError.message("The parent group was removed.")
+        }
+        let group = RepoGroup(name: try validatedGroupName(name, parentID: parentID), parentID: parentID)
         organization.groups.append(group)
+        expandGroupAncestors(parentID)
         persist()
         return group.id
     }
@@ -78,35 +100,110 @@ public final class AppModel {
         guard let index = organization.groups.firstIndex(where: { $0.id == id }) else {
             throw ValidationError.message("This group was removed.")
         }
-        let name = try validatedGroupName(name, excluding: id)
+        let name = try validatedGroupName(name, parentID: organization.groups[index].parentID, excluding: id)
         guard organization.groups[index].name != name else { return }
         organization.groups[index].name = name
         persist()
     }
 
-    private func validatedGroupName(_ name: String, excluding id: UUID? = nil) throws -> String {
+    private func validatedGroupName(_ name: String, parentID: UUID?, excluding id: UUID? = nil) throws -> String {
         let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !name.isEmpty else { throw ValidationError.message("Enter a group name.") }
-        guard !organization.groups.contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
-            throw ValidationError.message("A group with this name already exists.")
+        guard !organization.children(of: parentID).contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw ValidationError.message("A group with this name already exists at this level.")
         }
         return name
     }
 
     /// Dissolves a group without removing any repository or source.
     public func removeGroup(_ id: UUID) {
-        guard organization.groups.contains(where: { $0.id == id }) else { return }
+        guard let removed = organization.groups.first(where: { $0.id == id }) else { return }
+        // Promote children in place, preserving their subtrees and relative order.
+        organization.groups = organization.outline().map(\.group)
         organization.groups.removeAll { $0.id == id }
-        organization.groupByRepository = organization.groupByRepository.filter { $0.value != id }
+        var siblingNames = organization.children(of: removed.parentID).map(\.name)
+        for index in organization.groups.indices where organization.groups[index].parentID == id {
+            let original = organization.groups[index].name
+            var name = original
+            var suffix = 2
+            while siblingNames.contains(where: { $0.caseInsensitiveCompare(name) == .orderedSame }) {
+                name = "\(original) (\(suffix))"
+                suffix += 1
+            }
+            organization.groups[index].name = name
+            organization.groups[index].parentID = removed.parentID
+            siblingNames.append(name)
+        }
+        for repoID in organization.groupByRepository.keys.filter({ organization.groupByRepository[$0] == id }) {
+            organization.groupByRepository[repoID] = removed.parentID
+        }
         persist()
     }
 
     public func moveGroup(_ id: UUID, by offset: Int) {
-        guard let index = organization.groups.firstIndex(where: { $0.id == id }),
-              organization.groups.indices.contains(index + offset), offset != 0 else { return }
-        let group = organization.groups.remove(at: index)
-        organization.groups.insert(group, at: index + offset)
-        persist()
+        guard let group = organization.groups.first(where: { $0.id == id }), offset == -1 || offset == 1 else { return }
+        let siblings = organization.children(of: group.parentID)
+        guard let index = siblings.firstIndex(where: { $0.id == id }), siblings.indices.contains(index + offset) else { return }
+        let destination = index + offset
+        let target = offset < 0 ? siblings[destination].id : siblings.indices.contains(destination + 1) ? siblings[destination + 1].id : nil
+        moveGroup(id, to: group.parentID, before: target)
+    }
+
+    @discardableResult
+    public func moveGroup(_ id: UUID, to parentID: UUID?, before targetID: UUID? = nil) -> Bool {
+        let previous = organization
+        guard organization.moveGroup(id, to: parentID, before: targetID) else { return false }
+        expandGroupAncestors(parentID)
+        if organization != previous { persist() }
+        return true
+    }
+
+    public func canDropGroup(_ id: UUID, on targetID: UUID?, position: GroupDropPosition) -> Bool {
+        guard let targetID else { return position == .inside && organization.canMoveGroup(id, to: nil) }
+        guard id != targetID, let target = organization.groups.first(where: { $0.id == targetID }) else { return false }
+        switch position {
+        case .inside: return organization.canMoveGroup(id, to: targetID)
+        case .before: return organization.canMoveGroup(id, to: target.parentID, before: targetID)
+        case .after: return organization.canMoveGroup(id, to: target.parentID)
+        }
+    }
+
+    @discardableResult
+    public func dropSidebarItem(_ string: String, on groupID: UUID?, position: GroupDropPosition = .inside,
+                                before repositoryID: String? = nil) -> Bool {
+        guard let payload = SidebarDragPayload(string: string) else { return false }
+        switch payload {
+        case .group(let id):
+            guard repositoryID == nil else { return false }
+            return dropGroup(id, on: groupID, position: position)
+        case .repository(let id):
+            return moveRepositories([id], to: groupID, before: repositoryID)
+        }
+    }
+
+    @discardableResult
+    public func dropGroup(_ id: UUID, on targetID: UUID?, position: GroupDropPosition) -> Bool {
+        guard canDropGroup(id, on: targetID, position: position) else { return false }
+        guard let targetID, let target = organization.groups.first(where: { $0.id == targetID }) else {
+            return moveGroup(id, to: nil)
+        }
+        switch position {
+        case .inside: return moveGroup(id, to: targetID)
+        case .before: return moveGroup(id, to: target.parentID, before: targetID)
+        case .after:
+            let siblings = organization.children(of: target.parentID).filter { $0.id != id }
+            guard let index = siblings.firstIndex(where: { $0.id == targetID }) else { return false }
+            let next = siblings.indices.contains(index + 1) ? siblings[index + 1].id : nil
+            return moveGroup(id, to: target.parentID, before: next)
+        }
+    }
+
+    private func expandGroupAncestors(_ id: UUID?) {
+        var next = id
+        while let id = next, let index = organization.groups.firstIndex(where: { $0.id == id }) {
+            organization.groups[index].isExpanded = true
+            next = organization.groups[index].parentID
+        }
     }
 
     /// Moves existing repositories in their current order, before a target or to the end of a group.
@@ -139,6 +236,8 @@ public final class AppModel {
         }
         order.insert(contentsOf: moved, at: insertion)
         organization.repositoryOrder = order
+        if let groupID { expandGroupAncestors(groupID) }
+        else { organization.ungroupedExpanded = true }
         if organization != previous { persist() }
         return true
     }
