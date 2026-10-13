@@ -134,6 +134,7 @@ struct MainWindow: View {
                 Text(title)
                 Spacer()
                 Text("\(model.repositories(in: groupID, visibleOnly: false).count)")
+                    .padding(.trailing, 16)
             }
             .help("Drop a repository on this heading to move it to the end of the group.")
             .repositoryDropTarget(model: model, groupID: groupID)
