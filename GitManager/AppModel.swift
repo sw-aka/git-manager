@@ -5,6 +5,7 @@ import Observation
 public final class AppModel {
     public private(set) var sources: [RepoSource] = []
     public private(set) var settings = AppSettings()
+    public private(set) var organization = RepoOrganization()
     public private(set) var repos: [RepoRecord] = []
     public private(set) var sourceScanErrors: [UUID: [ScanIssue]] = [:]
     public private(set) var busy: Set<String> = []
@@ -38,6 +39,7 @@ public final class AppModel {
                 return source
             }
             settings = loaded.state.settings
+            organization = loaded.state.organization
             message = loaded.notice
             settings.fetchIntervalMinutes = settings.validatedInterval
         } catch {
@@ -46,13 +48,115 @@ public final class AppModel {
         }
     }
 
-    public var visibleRepos: [RepoRecord] { repos.filter { !needsAttentionOnly || $0.status.needsAttention } }
-    public var syncRepos: [RepoRecord] { repos.filter { $0.status.needsSync } }
+    public var orderedRepos: [RepoRecord] {
+        let ordered = organization.ordered(repos)
+        return organization.groups.flatMap { group in ordered.filter { organization.groupByRepository[$0.id] == group.id } }
+            + ordered.filter { organization.groupByRepository[$0.id] == nil }
+    }
+    public var visibleRepos: [RepoRecord] { orderedRepos.filter { !needsAttentionOnly || $0.status.needsAttention } }
+    public var syncRepos: [RepoRecord] { orderedRepos.filter { $0.status.needsSync } }
     public var menuBarTitle: String { syncRepos.isEmpty ? "" : String(syncRepos.count) }
-    public var selectedRepos: [RepoRecord] { repos.filter { selection.contains($0.id) } }
+    public var selectedRepos: [RepoRecord] { orderedRepos.filter { selection.contains($0.id) } }
     public var selectedRepo: RepoRecord? { selection.count == 1 ? selectedRepos.first : nil }
     public var selectedRemovalPlan: SourceRemovalPlan {
         SourceRemovalPlan.forRepositories(selection, sources: sources, repos: repos)
+    }
+
+    public func repositories(in groupID: UUID?, visibleOnly: Bool = true) -> [RepoRecord] {
+        (visibleOnly ? visibleRepos : orderedRepos).filter { organization.groupByRepository[$0.id] == groupID }
+    }
+
+    @discardableResult
+    public func createGroup(named name: String) throws -> UUID {
+        let group = RepoGroup(name: try validatedGroupName(name))
+        organization.groups.append(group)
+        persist()
+        return group.id
+    }
+
+    public func renameGroup(_ id: UUID, to name: String) throws {
+        guard let index = organization.groups.firstIndex(where: { $0.id == id }) else {
+            throw ValidationError.message("This group was removed.")
+        }
+        let name = try validatedGroupName(name, excluding: id)
+        guard organization.groups[index].name != name else { return }
+        organization.groups[index].name = name
+        persist()
+    }
+
+    private func validatedGroupName(_ name: String, excluding id: UUID? = nil) throws -> String {
+        let name = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty else { throw ValidationError.message("Enter a group name.") }
+        guard !organization.groups.contains(where: { $0.id != id && $0.name.caseInsensitiveCompare(name) == .orderedSame }) else {
+            throw ValidationError.message("A group with this name already exists.")
+        }
+        return name
+    }
+
+    /// Dissolves a group without removing any repository or source.
+    public func removeGroup(_ id: UUID) {
+        guard organization.groups.contains(where: { $0.id == id }) else { return }
+        organization.groups.removeAll { $0.id == id }
+        organization.groupByRepository = organization.groupByRepository.filter { $0.value != id }
+        persist()
+    }
+
+    public func moveGroup(_ id: UUID, by offset: Int) {
+        guard let index = organization.groups.firstIndex(where: { $0.id == id }),
+              organization.groups.indices.contains(index + offset), offset != 0 else { return }
+        let group = organization.groups.remove(at: index)
+        organization.groups.insert(group, at: index + offset)
+        persist()
+    }
+
+    /// Moves existing repositories in their current order, before a target or to the end of a group.
+    @discardableResult
+    public func moveRepositories(_ ids: Set<String>, to groupID: UUID?, before targetID: String? = nil) -> Bool {
+        guard groupID == nil || organization.groups.contains(where: { $0.id == groupID }) else { return false }
+        let ordered = organization.ordered(repos)
+        let moved = ordered.filter { ids.contains($0.id) }.map(\.id)
+        guard !moved.isEmpty else { return false }
+        let movedIDs = Set(moved)
+        if let targetID {
+            guard !movedIDs.contains(targetID),
+                  ordered.contains(where: { $0.id == targetID }),
+                  organization.groupByRepository[targetID] == groupID else { return false }
+        }
+        let previous = organization
+        // Keep temporarily unavailable repositories' positions and membership across scans.
+        var order = organization.repositoryOrder
+        let known = Set(order)
+        order.append(contentsOf: ordered.map(\.id).filter { !known.contains($0) })
+        order.removeAll { movedIDs.contains($0) }
+        for id in moved { organization.groupByRepository[id] = groupID }
+        let insertion: Int
+        if let targetID, let index = order.firstIndex(of: targetID) {
+            insertion = index
+        } else if let last = order.lastIndex(where: { organization.groupByRepository[$0] == groupID }) {
+            insertion = last + 1
+        } else {
+            insertion = order.count
+        }
+        order.insert(contentsOf: moved, at: insertion)
+        organization.repositoryOrder = order
+        if organization != previous { persist() }
+        return true
+    }
+
+    public func canMoveRepository(_ id: String, by offset: Int) -> Bool {
+        let records = repositories(in: organization.groupByRepository[id], visibleOnly: false)
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return false }
+        return offset != 0 && records.indices.contains(index + offset)
+    }
+
+    public func moveRepository(_ id: String, by offset: Int) {
+        guard canMoveRepository(id, by: offset) else { return }
+        let group = organization.groupByRepository[id]
+        let records = repositories(in: group, visibleOnly: false)
+        guard let index = records.firstIndex(where: { $0.id == id }) else { return }
+        let destination = index + offset
+        let target = offset < 0 ? records[destination].id : records.indices.contains(destination + 1) ? records[destination + 1].id : nil
+        moveRepositories([id], to: group, before: target)
     }
 
     public func start() async {
@@ -120,6 +224,10 @@ public final class AppModel {
         }
         guard !containsRemote(remote) else { throw ValidationError.message("This remote repository is already added.") }
         let wasSelected = selectedRepos.contains { $0.sourceIDs.contains(remote.id) }
+        if case .remote(let old) = sources[index] {
+            organization.replaceRepository(RepoLocation(source: .remote(old), path: old.path).id,
+                                           with: RepoLocation(source: .remote(remote), path: remote.path).id)
+        }
         replaceSource(at: index, with: .remote(remote))
         if wasSelected { selection.insert(RepoLocation(source: .remote(remote), path: remote.path).id) }
     }
@@ -155,17 +263,19 @@ public final class AppModel {
 
     /// Detaches repositories from the given sources; repositories still provided by another source stay.
     private func dropLocations(of ids: Set<UUID>) {
+        let previousIDs = Set(repos.map(\.id))
         repos = repos.compactMap { repo in
             let remaining = repo.locations.filter { !ids.contains($0.source.id) }
             return remaining.isEmpty ? nil : repo.withLocations(remaining)
         }
         selection.formIntersection(repos.map(\.id))
+        organization.removeRepositories(previousIDs.subtracting(repos.map(\.id)))
     }
 
     private func persist() {
         guard persistenceEnabled else { return }
-        do { try saveState(StoredState(sources: sources, settings: settings)) }
-        catch { message = "Could not save sources and settings: \(error.localizedDescription)" }
+        do { try saveState(StoredState(sources: sources, settings: settings, organization: organization)) }
+        catch { message = "Could not save sources, settings and repository organization: \(error.localizedDescription)" }
     }
 
     private func rescan() async {

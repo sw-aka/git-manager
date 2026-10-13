@@ -8,14 +8,11 @@ struct MainWindow: View {
     @State private var addingRemote = false
     @State private var pendingRemoval: RemovalConfirmation?
     @State private var editingRemote: RemoteRepoSource?
+    @State private var editingGroup: GroupEditorRequest?
 
     private var localSources: [RepoSource] {
         model.sources.filter { if case .local = $0 { true } else { false } }
     }
-    private var remoteHosts: [String] {
-        Set(model.sources.compactMap { if case .remote(let source) = $0 { source.host } else { nil } }).sorted()
-    }
-
     var body: some View {
         NavigationSplitView {
             List(selection: $model.selection) {
@@ -32,41 +29,32 @@ struct MainWindow: View {
                         .foregroundStyle(model.needsAttentionOnly ? Color.accentColor : Color.secondary)
                 }.buttonStyle(.plain)
 
-                ForEach(localSources) { source in
-                    Section {
-                        let records = model.visibleRepos.filter { $0.location.source.id == source.id }
-                        if records.isEmpty {
-                            let shared = model.visibleRepos.contains { $0.sourceIDs.contains(source.id) }
-                            Text(shared ? "Repositories listed under another source"
-                                 : model.needsAttentionOnly ? "No repositories need attention" : "No repositories found")
-                                .font(.caption).foregroundStyle(.secondary)
-                        }
-                        ForEach(records) { repo in
-                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource).tag(repo.id)
-                        }
-                    } header: {
-                        HStack {
-                            Text(source.title)
-                            if let issues = model.sourceScanErrors[source.id], !issues.isEmpty {
-                                Image(systemName: "exclamationmark.triangle.fill")
-                                    .foregroundStyle(.orange)
-                                    .accessibilityLabel("Some folders could not be scanned")
-                                    .help(issues.map { "\($0.path): \($0.message)" }.joined(separator: "\n"))
+                ForEach(model.organization.groups) { group in
+                    repositorySection(groupID: group.id, title: group.name)
+                }
+                repositorySection(groupID: nil, title: model.organization.groups.isEmpty ? "Repositories" : "Ungrouped")
+
+                if !localSources.isEmpty {
+                    Section("Source Folders") {
+                        ForEach(localSources) { source in
+                            HStack {
+                                Label(source.title, systemImage: "folder")
+                                Spacer()
+                                Text("\(model.repos.filter { $0.sourceIDs.contains(source.id) }.count)")
+                                    .foregroundStyle(.secondary)
+                                if let issues = model.sourceScanErrors[source.id], !issues.isEmpty {
+                                    Image(systemName: "exclamationmark.triangle.fill")
+                                        .foregroundStyle(.orange)
+                                        .accessibilityLabel("Some folders could not be scanned")
+                                        .help(issues.map { "\($0.path): \($0.message)" }.joined(separator: "\n"))
+                                }
                             }
-                        }
+                            .font(.caption)
                             .help(localPath(source))
                             .contextMenu {
                                 Button("Change Folder...") { editSource(source.id) }
                                 Button("Remove Source...", role: .destructive) { requestRemoval([source.id], false) }
                             }
-                    }
-                }
-                ForEach(remoteHosts, id: \.self) { host in
-                    Section(host) {
-                        ForEach(model.visibleRepos.filter {
-                            if case .remote(let remote) = $0.location.source { remote.host == host } else { false }
-                        }) { repo in
-                            RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource).tag(repo.id)
                         }
                     }
                 }
@@ -98,6 +86,7 @@ struct MainWindow: View {
             ToolbarItemGroup {
                 Button("Add Local Folder", systemImage: "folder.badge.plus", action: addLocal)
                 Button("Add Remote Repo", systemImage: "network") { addingRemote = true }
+                Button("New Group", systemImage: "rectangle.3.group") { newGroup([]) }
                 Button { Task { await model.refreshAll() } } label: {
                     Label(model.isRefreshing ? "Refreshing…" : "Refresh All", systemImage: "arrow.clockwise")
                 }.disabled(model.isRefreshing)
@@ -110,6 +99,7 @@ struct MainWindow: View {
         }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
         .sheet(item: $editingRemote) { AddRemoteSheet(model: model, editing: $0) }
+        .sheet(item: $editingGroup) { GroupNameSheet(model: model, request: $0) }
         .sheet(isPresented: Binding(
             get: { pendingRemoval != nil }, set: { if !$0 { pendingRemoval = nil } }
         )) {
@@ -125,6 +115,47 @@ struct MainWindow: View {
         } message: { Text(model.message ?? "") }
     }
 
+    private func repositorySection(groupID: UUID?, title: String) -> some View {
+        Section {
+            let records = model.repositories(in: groupID)
+            if records.isEmpty {
+                Text(model.needsAttentionOnly ? "No repositories need attention" : "Drag repositories here")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.vertical, 4)
+                    .repositoryDropTarget(model: model, groupID: groupID)
+            }
+            ForEach(records) { repo in
+                RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource, newGroup: newGroup)
+                    .tag(repo.id)
+            }
+        } header: {
+            HStack {
+                Text(title)
+                Spacer()
+                Text("\(model.repositories(in: groupID, visibleOnly: false).count)")
+            }
+            .help("Drop a repository on this heading to move it to the end of the group.")
+            .repositoryDropTarget(model: model, groupID: groupID)
+            .contextMenu {
+                if let groupID, let group = model.organization.groups.first(where: { $0.id == groupID }) {
+                    Button("Rename Group…") { editingGroup = GroupEditorRequest(group: group) }
+                    Button("Move Group Up") { model.moveGroup(groupID, by: -1) }
+                        .disabled(model.organization.groups.first?.id == groupID)
+                    Button("Move Group Down") { model.moveGroup(groupID, by: 1) }
+                        .disabled(model.organization.groups.last?.id == groupID)
+                    Divider()
+                    Button("Dissolve Group (Keep Repositories)") { model.removeGroup(groupID) }
+                }
+                Button("New Group…") { newGroup([]) }
+            }
+        }
+    }
+
+    private func newGroup(_ repositoryIDs: Set<String>) {
+        editingGroup = GroupEditorRequest(repositoryIDs: repositoryIDs)
+    }
+
     private var selectionSummary: some View {
         VStack(alignment: .leading, spacing: 12) {
             Text("\(model.selectedRepos.count) repositories selected").font(.headline)
@@ -136,6 +167,7 @@ struct MainWindow: View {
                 }.frame(maxWidth: .infinity, alignment: .leading)
             }
             .frame(maxHeight: 200)
+            RepositoryGroupMenu(model: model, repositoryIDs: model.selection, newGroup: newGroup)
             Button("Remove \(model.selectedRemovalPlan.entries.count) Sources...", role: .destructive) {
                 requestRemoval(model.selectedRemovalPlan.sourceIDs, true)
             }

@@ -53,4 +53,31 @@ final class StoreTests: XCTestCase {
         XCTAssertEqual(AppSettings(fetchIntervalMinutes: 0).validatedInterval, 1)
         XCTAssertEqual(AppSettings(fetchIntervalMinutes: 9999).validatedInterval, 1440)
     }
+
+    func testOrganizationRoundTripAndOlderStateMigration() throws {
+        let group = RepoGroup(name: "Work")
+        let state = StoredState(sources: [.local(LocalFolderSource(path: "/project"))],
+                                organization: RepoOrganization(groups: [group], repositoryOrder: ["local:/project"],
+                                                               groupByRepository: ["local:/project": group.id]))
+        let encoded = try JSONEncoder().encode(state)
+        XCTAssertEqual(try JSONDecoder().decode(StoredState.self, from: encoded), state)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for organization: Any? in [nil, NSNull(), ["futureOption": true], "invalid"] {
+            var object = original
+            object["organization"] = organization
+            let decoded = try JSONDecoder().decode(StoredState.self, from: JSONSerialization.data(withJSONObject: object))
+            XCTAssertEqual(decoded.sources, state.sources)
+            XCTAssertEqual(decoded.organization, RepoOrganization())
+        }
+    }
+
+    func testOrganizationNormalizesDuplicatesAndMissingGroups() throws {
+        let group = RepoGroup(name: "Work")
+        let state = StoredState(organization: RepoOrganization(groups: [group, group], repositoryOrder: ["a", "a", "b"],
+                                                               groupByRepository: ["a": group.id, "b": UUID()]))
+        let decoded = try JSONDecoder().decode(StoredState.self, from: JSONEncoder().encode(state))
+        XCTAssertEqual(decoded.organization.groups, [group])
+        XCTAssertEqual(decoded.organization.repositoryOrder, ["a", "b"])
+        XCTAssertEqual(decoded.organization.groupByRepository, ["a": group.id])
+    }
 }

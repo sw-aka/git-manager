@@ -3,10 +3,12 @@ import GitManagerCore
 import SwiftUI
 
 struct RepoRow: View {
+    @Environment(\.colorScheme) private var colorScheme
     let repo: RepoRecord
     let model: AppModel
     let requestRemoval: (Set<UUID>, Bool) -> Void
     let editSource: (UUID) -> Void
+    let newGroup: (Set<String>) -> Void
     private var isBusy: Bool { model.busy.contains(repo.id) }
     private static let bodyXHeight = NSFont.preferredFont(forTextStyle: .body).xHeight
     private static let captionXHeight = NSFont.preferredFont(forTextStyle: .caption1).xHeight
@@ -79,14 +81,56 @@ struct RepoRow: View {
         .padding(.vertical, 4)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
+        .help(repo.location.displayPath + "\nDrag to reorder or move to a group.")
+        .draggable(RepositoryDrag.value(for: repo.id)) {
+            RepositoryDragPreview(name: repo.location.name, branch: repo.status.branch, colorScheme: colorScheme)
+        }
+        .repositoryDropTarget(model: model, groupID: model.organization.groupByRepository[repo.id], before: repo.id)
         .contextMenu {
             Button("Sync") { Task { await model.sync(repo.id) } }.disabled(isBusy || !repo.status.canSync)
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
             Button("Refresh") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
             Divider()
+            RepositoryGroupMenu(model: model,
+                                repositoryIDs: model.selection.contains(repo.id) ? model.selection : [repo.id],
+                                newGroup: newGroup)
+            Button("Move Up") { model.moveRepository(repo.id, by: -1) }
+                .disabled(!model.canMoveRepository(repo.id, by: -1))
+            Button("Move Down") { model.moveRepository(repo.id, by: 1) }
+                .disabled(!model.canMoveRepository(repo.id, by: 1))
+            Divider()
             EditSourceAction(repo: repo, model: model, editSource: editSource)
             RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval, allowsBulkRemoval: true)
         }
+    }
+}
+
+struct RepositoryDragPreview: View {
+    let name: String
+    let branch: String
+    let colorScheme: ColorScheme
+
+    // Drag previews render outside the sidebar's environment. Resolve both
+    // foreground and background from the source row's appearance explicitly.
+    private var foreground: Color { colorScheme == .dark ? .white : .black }
+    private var background: Color { Color(white: colorScheme == .dark ? 0.18 : 0.97) }
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "arrow.triangle.branch")
+            Text(name).fontWeight(.semibold)
+            Text(branch).font(.caption).foregroundStyle(foreground.opacity(0.75))
+        }
+        .font(.body)
+        .foregroundStyle(foreground)
+        .lineLimit(1)
+        .padding(.horizontal, 12)
+        .padding(.vertical, 8)
+        .background(background, in: RoundedRectangle(cornerRadius: 8))
+        .overlay {
+            RoundedRectangle(cornerRadius: 8).strokeBorder(foreground.opacity(0.18), lineWidth: 1)
+        }
+        .environment(\.colorScheme, colorScheme)
     }
 }
 
