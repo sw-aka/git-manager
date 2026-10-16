@@ -3,13 +3,14 @@ import SwiftUI
 import AppKit
 
 struct MainWindow: View {
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
     @State private var addingRemote = false
     @State private var pendingRemoval: RemovalConfirmation?
     @State private var editingRemote: RemoteRepoSource?
     @State private var editingGroup: GroupEditorRequest?
-    @State private var draggedGroupID: UUID?
+    @State private var dragState = SidebarDragState()
 
     private var localSources: [RepoSource] {
         model.sources.filter { if case .local = $0 { true } else { false } }
@@ -34,26 +35,34 @@ struct MainWindow: View {
                     switch item {
                     case .group(let entry):
                         GroupHeaderRow(model: model, group: entry.group, depth: entry.depth,
-                                       draggedGroupID: $draggedGroupID, newSubgroup: newSubgroup,
+                                       dragState: dragState, newSubgroup: newSubgroup,
                                        rename: { editingGroup = GroupEditorRequest(group: $0) })
                             .selectionDisabled()
                     case .ungrouped:
                         GroupHeaderRow(model: model, group: nil, depth: 0,
-                                       draggedGroupID: $draggedGroupID, newSubgroup: newSubgroup,
+                                       dragState: dragState, newSubgroup: newSubgroup,
                                        rename: { editingGroup = GroupEditorRequest(group: $0) })
                             .selectionDisabled()
                     case .repository(let repo, let depth):
                         RepoRow(repo: repo, model: model, requestRemoval: requestRemoval, editSource: editSource,
-                                newGroup: newGroup, draggedGroupID: $draggedGroupID)
+                                newGroup: newGroup, dragState: dragState)
                             .padding(.leading, CGFloat(depth) * 16 + 24)
+                            .contentShape(Rectangle())
                             .tag(repo.id)
+                            .overlay {
+                                SidebarDragSource(payload: .repository(repo.id), state: dragState,
+                                                  preview: SidebarDragPreview(name: repo.location.name,
+                                                      detail: repo.status.branch, symbol: "arrow.triangle.branch",
+                                                      colorScheme: colorScheme),
+                                                  select: { model.selection = [repo.id] })
+                            }
                     case .empty(let groupID, let depth):
                         Text(model.needsAttentionOnly ? "No repositories need attention" : "Drag repositories here")
                             .font(.caption).foregroundStyle(.secondary)
                             .frame(maxWidth: .infinity, alignment: .leading)
                             .padding(.leading, CGFloat(depth) * 16 + 24)
                             .padding(.vertical, 4)
-                            .repositoryDropTarget(model: model, groupID: groupID, draggedGroupID: $draggedGroupID)
+                            .repositoryDropTarget(model: model, groupID: groupID, dragState: dragState)
                             .selectionDisabled()
                     }
                 }

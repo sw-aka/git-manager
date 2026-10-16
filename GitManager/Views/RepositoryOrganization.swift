@@ -94,22 +94,24 @@ private struct RepositoryDropTarget: ViewModifier {
     let model: AppModel
     let groupID: UUID?
     var before: String?
-    @Binding var draggedGroupID: UUID?
-    @State private var isTargeted = false
+    let dragState: SidebarDragState
+
+    private var target: SidebarDropTarget { before.map { .repository($0) } ?? .emptyGroup(groupID) }
+    private var isTargeted: Bool { dragState.target == target }
 
     func body(content: Content) -> some View {
         content
             .contentShape(Rectangle())
-            .background(isTargeted && draggedGroupID == nil ? Color.accentColor.opacity(0.15) : Color.clear,
+            .background(isTargeted ? Color.accentColor.opacity(0.15) : Color.clear,
                         in: RoundedRectangle(cornerRadius: 4))
             .overlay(alignment: .top) {
-                if isTargeted && draggedGroupID == nil && before != nil {
+                if isTargeted && before != nil {
                     Rectangle().fill(Color.accentColor).frame(height: 2)
                 }
             }
             .onDrop(of: [.plainText], delegate: RepositoryDropDelegate(
                 model: model, groupID: groupID, before: before,
-                draggedGroupID: $draggedGroupID, isTargeted: $isTargeted
+                dragState: dragState, target: target
             ))
     }
 }
@@ -118,42 +120,37 @@ private struct RepositoryDropDelegate: DropDelegate {
     let model: AppModel
     let groupID: UUID?
     let before: String?
-    @Binding var draggedGroupID: UUID?
-    @Binding var isTargeted: Bool
+    let dragState: SidebarDragState
+    let target: SidebarDropTarget
 
     func validateDrop(info: DropInfo) -> Bool {
-        draggedGroupID == nil && info.hasItemsConforming(to: [.plainText])
+        dragState.acceptsRepositoryDrop(before: before) && info.hasItemsConforming(to: [.plainText])
     }
 
-    func dropEntered(info: DropInfo) { isTargeted = validateDrop(info: info) }
-    func dropExited(info: DropInfo) { isTargeted = false }
+    func dropEntered(info: DropInfo) { updateTarget(info) }
+    func dropExited(info: DropInfo) { dragState.leave(target) }
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        let allowed = validateDrop(info: info)
-        isTargeted = allowed
+        let allowed = updateTarget(info)
         return DropProposal(operation: allowed ? .move : .forbidden)
     }
 
-    func performDrop(info: DropInfo) -> Bool {
-        isTargeted = false
-        guard validateDrop(info: info), let provider = info.itemProviders(for: [.plainText]).first,
-              provider.canLoadObject(ofClass: NSString.self) else { return false }
-        provider.loadObject(ofClass: NSString.self) { value, _ in
-            guard let value = value as? String, let payload = SidebarDragPayload(string: value),
-                  case .repository = payload else { return }
-            Task { @MainActor in model.dropSidebarItem(value, on: groupID, before: before) }
-        }
-        return true
+    @discardableResult
+    private func updateTarget(_ info: DropInfo) -> Bool {
+        let allowed = validateDrop(info: info)
+        if allowed { dragState.hover(target) }
+        else { dragState.clearTarget() }
+        return allowed
     }
-}
 
-enum SidebarDragItemProvider {
-    static func make(for payload: SidebarDragPayload) -> NSItemProvider {
-        NSItemProvider(object: payload.string as NSString)
+    func performDrop(info: DropInfo) -> Bool {
+        dragState.clearTarget()
+        guard validateDrop(info: info), let payload = dragState.payload else { return false }
+        return model.dropSidebarItem(payload.string, on: groupID, before: before)
     }
 }
 
 extension View {
-    func repositoryDropTarget(model: AppModel, groupID: UUID?, draggedGroupID: Binding<UUID?>, before: String? = nil) -> some View {
-        modifier(RepositoryDropTarget(model: model, groupID: groupID, before: before, draggedGroupID: draggedGroupID))
+    func repositoryDropTarget(model: AppModel, groupID: UUID?, dragState: SidebarDragState, before: String? = nil) -> some View {
+        modifier(RepositoryDropTarget(model: model, groupID: groupID, before: before, dragState: dragState))
     }
 }

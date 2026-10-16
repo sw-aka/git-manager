@@ -3,13 +3,12 @@ import GitManagerCore
 import SwiftUI
 
 struct RepoRow: View {
-    @Environment(\.colorScheme) private var colorScheme
     let repo: RepoRecord
     let model: AppModel
     let requestRemoval: (Set<UUID>, Bool) -> Void
     let editSource: (UUID) -> Void
     let newGroup: (Set<String>) -> Void
-    @Binding var draggedGroupID: UUID?
+    let dragState: SidebarDragState
     private var isBusy: Bool { model.busy.contains(repo.id) }
     private static let bodyXHeight = NSFont.preferredFont(forTextStyle: .body).xHeight
     private static let captionXHeight = NSFont.preferredFont(forTextStyle: .caption1).xHeight
@@ -27,20 +26,22 @@ struct RepoRow: View {
     }
 
     var body: some View {
-        HStack(spacing: 6) {
+        let bodyXHeight = Self.bodyXHeight
+        let captionXHeight = Self.captionXHeight
+        return HStack(spacing: 6) {
             HStack(alignment: .xHeightCenter, spacing: 6) {
                 Text(repo.location.name)
                     .font(.body.weight(.semibold))
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .layoutPriority(1)
-                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - Self.bodyXHeight / 2 }
+                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - bodyXHeight / 2 }
                 Text(repo.status.branch)
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - Self.captionXHeight / 2 }
+                    .alignmentGuide(.xHeightCenter) { $0[.firstTextBaseline] - captionXHeight / 2 }
             }
             .layoutPriority(1)
             Spacer(minLength: 0)
@@ -83,14 +84,8 @@ struct RepoRow: View {
         .accessibilityElement(children: .combine)
         .accessibilityLabel(accessibilitySummary)
         .help(repo.location.displayPath + "\nDrag to reorder or move to a group.")
-        .onDrag {
-            draggedGroupID = nil
-            return SidebarDragItemProvider.make(for: .repository(repo.id))
-        } preview: {
-            SidebarDragPreview(name: repo.location.name, detail: repo.status.branch, symbol: "arrow.triangle.branch", colorScheme: colorScheme)
-        }
         .repositoryDropTarget(model: model, groupID: model.organization.groupByRepository[repo.id],
-                              draggedGroupID: $draggedGroupID, before: repo.id)
+                              dragState: dragState, before: repo.id)
         .contextMenu {
             Button("Sync") { Task { await model.sync(repo.id) } }.disabled(isBusy || !repo.status.canSync)
             Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
@@ -107,36 +102,6 @@ struct RepoRow: View {
             EditSourceAction(repo: repo, model: model, editSource: editSource)
             RemoveSourceAction(repo: repo, model: model, requestRemoval: requestRemoval, allowsBulkRemoval: true)
         }
-    }
-}
-
-struct SidebarDragPreview: View {
-    let name: String
-    var detail: String? = nil
-    let symbol: String
-    let colorScheme: ColorScheme
-
-    // Drag previews render outside the sidebar's environment. Resolve both
-    // foreground and background from the source row's appearance explicitly.
-    private var foreground: Color { colorScheme == .dark ? .white : .black }
-    private var background: Color { Color(white: colorScheme == .dark ? 0.18 : 0.97) }
-
-    var body: some View {
-        HStack(spacing: 8) {
-            Image(systemName: symbol)
-            Text(name).fontWeight(.semibold)
-            if let detail { Text(detail).font(.caption).foregroundStyle(foreground.opacity(0.75)) }
-        }
-        .font(.body)
-        .foregroundStyle(foreground)
-        .lineLimit(1)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(background, in: RoundedRectangle(cornerRadius: 8))
-        .overlay {
-            RoundedRectangle(cornerRadius: 8).strokeBorder(foreground.opacity(0.18), lineWidth: 1)
-        }
-        .environment(\.colorScheme, colorScheme)
     }
 }
 
