@@ -88,7 +88,7 @@ struct RepoRow: View {
                               dragState: dragState, before: repo.id)
         .contextMenu {
             Button("Sync") { Task { await model.sync(repo.id) } }.disabled(isBusy || !repo.status.canSync)
-            Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
+            OpenInEditorMenu(repo: repo, model: model)
             Button("Refresh") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
             Divider()
             RepositoryGroupMenu(model: model,

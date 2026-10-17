@@ -2,14 +2,18 @@ import Foundation
 
 public struct AppSettings: Codable, Equatable, Sendable {
     public var fetchIntervalMinutes: Int
-    public init(fetchIntervalMinutes: Int = 5) {
+    public var repositoryEditors: [String: RepositoryEditor]
+    public init(fetchIntervalMinutes: Int = 5, repositoryEditors: [String: RepositoryEditor] = [:]) {
         self.fetchIntervalMinutes = fetchIntervalMinutes
+        self.repositoryEditors = repositoryEditors
     }
 
-    private enum CodingKeys: String, CodingKey { case fetchIntervalMinutes }
+    private enum CodingKeys: String, CodingKey { case fetchIntervalMinutes, repositoryEditors }
     public init(from decoder: any Decoder) throws {
         let values = try decoder.container(keyedBy: CodingKeys.self)
         fetchIntervalMinutes = (try? values.decodeIfPresent(Int.self, forKey: .fetchIntervalMinutes)) ?? 5
+        let editors = (try? values.decodeIfPresent([String: String].self, forKey: .repositoryEditors)) ?? [:]
+        repositoryEditors = editors.compactMapValues(RepositoryEditor.init(rawValue:))
     }
 
     public var validatedInterval: Int { min(1440, max(1, fetchIntervalMinutes)) }

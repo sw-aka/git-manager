@@ -2,6 +2,23 @@ import XCTest
 @testable import GitManagerCore
 
 final class StoreTests: XCTestCase {
+    func testEditorPreferencesRoundTripAndTolerantMigration() throws {
+        let state = StoredState(settings: AppSettings(fetchIntervalMinutes: 17,
+                                                      repositoryEditors: ["local:/repo": .vsCode, "remote:repo": .zed]))
+        let encoded = try JSONEncoder().encode(state)
+        XCTAssertEqual(try JSONDecoder().decode(StoredState.self, from: encoded), state)
+        let original = try XCTUnwrap(JSONSerialization.jsonObject(with: encoded) as? [String: Any])
+        for editors: Any? in [nil, NSNull(), "invalid", ["local:/repo": "vsCode", "other": "futureEditor"]] {
+            var object = original
+            var settings = try XCTUnwrap(object["settings"] as? [String: Any])
+            settings["repositoryEditors"] = editors
+            object["settings"] = settings
+            let decoded = try JSONDecoder().decode(StoredState.self, from: JSONSerialization.data(withJSONObject: object))
+            XCTAssertEqual(decoded.settings.fetchIntervalMinutes, 17)
+            XCTAssertEqual(decoded.settings.repositoryEditors, editors is [String: String] ? ["local:/repo": .vsCode] : [:])
+        }
+    }
+
     func testRoundTripAndDefaults() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-store-\(UUID())")
         defer { try? FileManager.default.removeItem(at: root) }

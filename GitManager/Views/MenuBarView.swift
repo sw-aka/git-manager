@@ -13,7 +13,7 @@ struct MenuBarView: View {
                 Text(repo.location.displayPath)
                 Button("Sync") { Task { await model.sync(repo.id) } }
                     .disabled(model.busy.contains(repo.id) || !repo.status.canSync)
-                Button("Open in Zed") { Task { await model.openInZed(repo.id) } }
+                OpenInEditorMenu(repo: repo, model: model)
                 if let error = repo.status.error { Text(error) }
             }
         }

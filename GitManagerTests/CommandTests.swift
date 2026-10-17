@@ -2,6 +2,74 @@ import XCTest
 @testable import GitManagerCore
 
 final class CommandTests: XCTestCase {
+    func testVSCodeLocalCLIAndFallback() throws {
+        let location = RepoLocation(source: .local(LocalFolderSource(path: "/tmp/repo")), path: "/tmp/repo's $(false) 名")
+        XCTAssertEqual(try VSCodeLauncher.command(for: location, cliExists: true, appExists: true),
+                       CommandInvocation(executable: VSCodeLauncher.cliPath, arguments: [location.path]))
+        XCTAssertEqual(try VSCodeLauncher.command(for: location, cliExists: false, appExists: true),
+                       CommandInvocation(executable: "/usr/bin/open", arguments: ["-a", "Visual Studio Code", location.path]))
+        XCTAssertThrowsError(try VSCodeLauncher.command(for: location, cliExists: true, appExists: false))
+    }
+
+    func testVSCodeRemoteAuthorityAndEncodedFolderPath() throws {
+        for host in ["WorkAlias", "sam@WorkAlias", "sam@[::1]", "::1", "deadbeef"] {
+            let remote = RemoteRepoSource(host: host, port: 2222, path: "/source")
+            let location = RepoLocation(source: .remote(remote), path: "/repo's folder/名?#%$(false)")
+            let command = try VSCodeLauncher.command(for: location, cliExists: true, appExists: true)
+            XCTAssertEqual(command.executable, VSCodeLauncher.cliPath)
+            XCTAssertEqual(command.arguments.first, "--folder-uri")
+            let uri = try XCTUnwrap(URLComponents(string: command.arguments[1]))
+            XCTAssertEqual(uri.scheme, "vscode-remote")
+            XCTAssertEqual(uri.path, location.path)
+            XCTAssertNil(uri.query)
+            XCTAssertNil(uri.fragment)
+            let authority = try XCTUnwrap(uri.host)
+            XCTAssertTrue(authority.hasPrefix("ssh-remote+"))
+            let hex = Array(authority.dropFirst("ssh-remote+".count))
+            let bytes = stride(from: 0, to: hex.count, by: 2).compactMap { UInt8(String(hex[$0...$0 + 1]), radix: 16) }
+            let data = try XCTUnwrap(JSONSerialization.jsonObject(with: Data(bytes)) as? [String: Any])
+            let expectedHost = host.split(separator: "@").last.map(String.init)!.trimmingCharacters(in: CharacterSet(charactersIn: "[]"))
+            XCTAssertEqual(data["hostName"] as? String, expectedHost)
+            XCTAssertEqual(data["user"] as? String, host.contains("@") ? "sam" : nil)
+            XCTAssertEqual(data["port"] as? Int, 2222)
+            XCTAssertThrowsError(try VSCodeLauncher.command(for: location, cliExists: false, appExists: true))
+        }
+        let remote = RemoteRepoSource(host: "WorkAlias", path: "/repo")
+        XCTAssertFalse(try VSCodeLauncher.remoteURI(remote).isEmpty)
+        for remote in [RemoteRepoSource(host: "-bad", path: "/repo"),
+                       RemoteRepoSource(host: "host", port: 0, path: "/repo"),
+                       RemoteRepoSource(host: "host", path: "~/repo")] {
+            XCTAssertThrowsError(try VSCodeLauncher.remoteURI(remote))
+        }
+    }
+
+    func testVSCodeResolvesHomePathsOnRemoteAndRejectsIncompleteOutput() async throws {
+        let remote = RemoteRepoSource(host: "WorkAlias", port: 2222, path: "~/repo's $(false)")
+        let location = RepoLocation(source: .remote(remote), path: remote.path)
+        let runner = EditorPathRunner(result: CommandResult(stdout: "/Users/remote/repo's $(false)\n", stderr: "", exitCode: 0))
+        let launcher = VSCodeLauncher(runnerFactory: { _ in runner })
+        let resolved = try await launcher.resolvedLocation(location)
+        XCTAssertEqual(resolved.path, "/Users/remote/repo's $(false)")
+        XCTAssertEqual(resolved.source, location.source)
+        let calls = await runner.calls
+        XCTAssertEqual(calls, [["rev-parse", "--show-toplevel"]])
+        for result in [CommandResult(stdout: "", stderr: "Permission denied", exitCode: 1),
+                       CommandResult(stdout: "/partial", stderr: "", exitCode: 0, truncated: true),
+                       CommandResult(stdout: "relative\n", stderr: "", exitCode: 0),
+                       CommandResult(stdout: "/repo\nextra\n", stderr: "", exitCode: 0)] {
+            let failing = VSCodeLauncher(runnerFactory: { _ in EditorPathRunner(result: result) })
+            do {
+                _ = try await failing.resolvedLocation(location)
+                XCTFail("Invalid or incomplete remote paths must not launch VS Code")
+            } catch {}
+        }
+        let absolute = RepoLocation(source: .remote(remote), path: "/absolute/repo")
+        let unchanged = try await launcher.resolvedLocation(absolute)
+        XCTAssertEqual(unchanged, absolute)
+        let finalCalls = await runner.calls
+        XCTAssertEqual(finalCalls.count, 1, "Absolute paths must not require an extra SSH command")
+    }
+
     func testLocalCommandAndNoninteractiveEnvironment() {
         let runner = LocalGitRunner(path: "/tmp/my repo's", executor: ProcessExecutor(environment: [
             "PATH": "/custom", "HOME": "/test", "SSH_AUTH_SOCK": "/agent",
@@ -170,5 +238,15 @@ final class CommandTests: XCTestCase {
             guard case .remote(let source) = location.source else { return XCTFail("Not a remote source") }
             XCTAssertEqual(source.host, host, "SSH argument formatting must not change stored host spelling")
         }
+    }
+}
+
+private actor EditorPathRunner: GitRunner {
+    let result: CommandResult
+    private(set) var calls: [[String]] = []
+    init(result: CommandResult) { self.result = result }
+    func run(args: [String], timeout: TimeInterval) async -> CommandResult {
+        calls.append(args)
+        return result
     }
 }

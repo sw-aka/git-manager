@@ -34,7 +34,7 @@ struct RepoDetail: View {
                             Image(systemName: "arrow.triangle.2.circlepath").symbolEffect(.rotate, isActive: isSyncing)
                         }
                     }.disabled(isBusy || !repo.status.canSync)
-                    Button("Open in Zed", systemImage: "arrow.up.right.square") { Task { await model.openInZed(repo.id) } }
+                    OpenInEditorMenu(repo: repo, model: model)
                     Button("Refresh", systemImage: "arrow.clockwise") { Task { await model.refresh(repo.id) } }.disabled(isBusy)
                     Spacer()
                     EditSourceAction(repo: repo, model: model, editSource: editSource)

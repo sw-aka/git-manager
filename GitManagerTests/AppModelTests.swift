@@ -53,6 +53,72 @@ private actor StatusConcurrencyRunner: GitRunner {
 
 @MainActor
 final class AppModelTests: XCTestCase {
+    func testEditorChoiceIsPerRepositoryAndSurvivesRefreshAndRestart() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = root.appendingPathComponent("first")
+        let second = root.appendingPathComponent("second")
+        for repo in [first, second] {
+            try FileManager.default.createDirectory(at: repo.appendingPathComponent(".git"), withIntermediateDirectories: true)
+        }
+        let store = Store(directory: root.appendingPathComponent("state"))
+        try store.save(StoredState(sources: [.local(LocalFolderSource(path: root.path))]))
+        let launches = EditorLaunchRecorder()
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: ControlledRunner()) }, openEditor: {
+            await launches.open($0, in: $1)
+        })
+        await model.refreshAll(fetch: false)
+        let firstPath = RepoLocation.canonicalLocalPath(first.path)
+        let secondPath = RepoLocation.canonicalLocalPath(second.path)
+        let firstID = try XCTUnwrap(model.repos.first { $0.location.path == firstPath }?.id)
+        let secondID = try XCTUnwrap(model.repos.first { $0.location.path == secondPath }?.id)
+        XCTAssertEqual(model.preferredEditor(for: firstID), .zed)
+        await model.openRepository(firstID, in: .vsCode)
+        await model.openRepository(secondID)
+        await model.refreshAll(fetch: false)
+        XCTAssertEqual(model.preferredEditor(for: firstID), .vsCode)
+        XCTAssertEqual(model.preferredEditor(for: secondID), .zed)
+        await model.openRepository(firstID)
+        let restored = AppModel(store: store, serviceFactory: { _ in RepoService(runner: ControlledRunner()) }, openEditor: {
+            await launches.open($0, in: $1)
+        })
+        await restored.refreshAll(fetch: false)
+        XCTAssertEqual(restored.preferredEditor(for: firstID), .vsCode)
+        await restored.openRepository(firstID)
+        await restored.openRepository(firstID, in: .zed)
+        XCTAssertEqual(try store.load().settings.repositoryEditors[firstID], .zed)
+        let editors = await launches.editors
+        XCTAssertEqual(editors, [.vsCode, .zed, .vsCode, .vsCode, .zed])
+        await restored.openRepository("removed-repository", in: .vsCode)
+        XCTAssertNil(restored.settings.repositoryEditors["removed-repository"])
+        let paths = await launches.paths
+        XCTAssertEqual(paths, [firstPath, secondPath, firstPath, firstPath, firstPath])
+    }
+
+    func testFailedEditorLaunchStillRemembersSelectionForExactRemoteIdentity() async throws {
+        let root = try temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let first = RemoteRepoSource(host: "WorkAlias", path: "~/repo")
+        let second = RemoteRepoSource(host: "WorkAlias", port: 2222, path: "~/repo")
+        let store = Store(directory: root)
+        try store.save(StoredState(sources: [.remote(first), .remote(second)]))
+        let model = AppModel(store: store, serviceFactory: { _ in RepoService(runner: ControlledRunner()) }, openEditor: { _, _ in
+            CommandResult(stdout: "", stderr: "Editor is missing", exitCode: -1)
+        })
+        await model.refreshAll(fetch: false)
+        let firstID = RepoLocation(source: .remote(first), path: first.path).id
+        let secondID = RepoLocation(source: .remote(second), path: second.path).id
+        await model.openRepository(firstID, in: .vsCode)
+        XCTAssertEqual(model.repos.first { $0.id == firstID }?.status.error, "Editor is missing")
+        XCTAssertEqual(model.preferredEditor(for: firstID), .vsCode)
+        XCTAssertEqual(model.preferredEditor(for: secondID), .zed)
+        model.setInterval(12)
+        let restored = AppModel(store: store)
+        XCTAssertEqual(restored.preferredEditor(for: firstID), .vsCode)
+        XCTAssertEqual(restored.preferredEditor(for: secondID), .zed)
+        XCTAssertEqual(restored.settings.fetchIntervalMinutes, 12)
+    }
+
     private func temporaryDirectory() throws -> URL {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent("gitmanager-model-\(UUID())")
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
@@ -446,5 +512,15 @@ final class AppModelTests: XCTestCase {
         XCTAssertEqual(individual.fetches, 18)
         XCTAssertEqual(individual.maximum, 4)
         XCTAssertTrue(model.busy.isEmpty)
+    }
+}
+
+private actor EditorLaunchRecorder {
+    private(set) var editors: [RepositoryEditor] = []
+    private(set) var paths: [String] = []
+    func open(_ location: RepoLocation, in editor: RepositoryEditor) -> CommandResult {
+        editors.append(editor)
+        paths.append(location.path)
+        return CommandResult(stdout: "", stderr: "", exitCode: 0)
     }
 }

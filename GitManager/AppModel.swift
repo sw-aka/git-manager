@@ -18,6 +18,7 @@ public final class AppModel {
     @ObservationIgnored private let store: Store
     @ObservationIgnored private let serviceFactory: @Sendable (RepoLocation) -> RepoService
     @ObservationIgnored private let saveState: (StoredState) throws -> Void
+    @ObservationIgnored private let openEditor: @Sendable (RepoLocation, RepositoryEditor) async -> CommandResult
     @ObservationIgnored private var persistenceEnabled = true
     @ObservationIgnored private let limiter = WorkLimiter()
     @ObservationIgnored private var timer: Task<Void, Never>?
@@ -28,10 +29,14 @@ public final class AppModel {
     }
 
     init(store: Store, serviceFactory: @escaping @Sendable (RepoLocation) -> RepoService,
-         saveState: ((StoredState) throws -> Void)? = nil) {
+         saveState: ((StoredState) throws -> Void)? = nil,
+         openEditor: @escaping @Sendable (RepoLocation, RepositoryEditor) async -> CommandResult = {
+             await EditorLauncher().open($0, in: $1)
+         }) {
         self.store = store
         self.serviceFactory = serviceFactory
         self.saveState = saveState ?? { try store.save($0) }
+        self.openEditor = openEditor
         do {
             let loaded = try store.loadRecovering()
             sources = loaded.state.sources.map { source in
@@ -475,9 +480,18 @@ public final class AppModel {
         busy.remove(id)
     }
 
-    public func openInZed(_ id: String) async {
+    public func preferredEditor(for id: String) -> RepositoryEditor {
+        settings.repositoryEditors[id] ?? .zed
+    }
+
+    public func openRepository(_ id: String, in editor: RepositoryEditor? = nil) async {
         guard let repo = repos.first(where: { $0.id == id }) else { return }
-        let result = await ZedLauncher().open(repo.location)
+        let editor = editor ?? preferredEditor(for: id)
+        if settings.repositoryEditors[id] != editor {
+            settings.repositoryEditors[id] = editor
+            persist()
+        }
+        let result = await openEditor(repo.location, editor)
         if !result.succeeded, let index = repos.firstIndex(where: { $0.id == id }) {
             repos[index].status.error = result.failureMessage
         }
