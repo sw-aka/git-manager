@@ -376,6 +376,43 @@ public final class AppModel {
         organization.removeRepositories(previousIDs.subtracting(repos.map(\.id)))
     }
 
+    public var configurationState: StoredState {
+        StoredState(sources: sources, settings: settings, organization: organization)
+    }
+
+    public var configurationRemovalPlan: SourceRemovalPlan {
+        SourceRemovalPlan(sourceIDs: Set(sources.map(\.id)), sources: sources, repos: repos)
+    }
+
+    public func exportConfiguration() throws -> String {
+        try ConfigurationTransfer.export(configurationState, repositories: repos)
+    }
+
+    /// Save before changing live state. Return false when the reviewed setup has changed.
+    @discardableResult
+    public func importConfiguration(_ text: String, replacing expected: StoredState,
+                                    removalPlan: SourceRemovalPlan) throws -> Bool {
+        let imported = try ConfigurationTransfer.parse(text)
+        guard persistenceEnabled else {
+            throw ValidationError.message("Saving is disabled because the existing state could not be loaded. Resolve that error before importing.")
+        }
+        guard !isRefreshing, busy.isEmpty else {
+            throw ValidationError.message("Wait for repository operations to finish before importing.")
+        }
+        guard configurationState == expected, configurationRemovalPlan == removalPlan else { return false }
+        try saveState(imported)
+        sources = imported.sources
+        settings = imported.settings
+        organization = imported.organization
+        repos = []
+        sourceScanErrors = [:]
+        selection = []
+        needsAttentionOnly = false
+        if started { scheduleTimer() }
+        Task { await refreshAll(fetch: false) }
+        return true
+    }
+
     private func persist() {
         guard persistenceEnabled else { return }
         do { try saveState(StoredState(sources: sources, settings: settings, organization: organization)) }

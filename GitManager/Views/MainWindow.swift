@@ -7,6 +7,7 @@ struct MainWindow: View {
     @Environment(\.openWindow) private var openWindow
     @Bindable var model: AppModel
     @State private var addingRemote = false
+    @State private var transferringSetup = false
     @State private var pendingRemoval: RemovalConfirmation?
     @State private var editingRemote: RemoteRepoSource?
     @State private var editingGroup: GroupEditorRequest?
@@ -119,6 +120,7 @@ struct MainWindow: View {
             ToolbarItemGroup {
                 Button("Add Local Folder", systemImage: "folder.badge.plus", action: addLocal)
                 Button("Add Remote Repo", systemImage: "network") { addingRemote = true }
+                Button("Export / Import Setup", systemImage: "arrow.up.arrow.down") { transferringSetup = true }
                 Button("New Group", systemImage: "rectangle.3.group") { newGroup([]) }
                 Button { Task { await model.refreshAll() } } label: {
                     Label(model.isRefreshing ? "Refreshing…" : "Refresh All", systemImage: "arrow.clockwise")
@@ -130,6 +132,7 @@ struct MainWindow: View {
             AppWindows.startLifecycleTest(using: openWindow)
             #endif
         }
+        .sheet(isPresented: $transferringSetup) { ConfigurationTransferView(model: model) }
         .sheet(isPresented: $addingRemote) { AddRemoteSheet(model: model) }
         .sheet(item: $editingRemote) { AddRemoteSheet(model: model, editing: $0) }
         .sheet(item: $editingGroup) { GroupNameSheet(model: model, request: $0) }
